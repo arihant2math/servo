@@ -65,6 +65,11 @@ packages = [
 
     # icu (from mozjs) uses old version
     "regex-automata",
+
+    # rkv
+    "syn",
+    "synstructure",
+    "uuid",
 ]
 # Files that are ignored for all tidy and lint checks.
 files = [
