@@ -230,7 +230,7 @@ impl IDBTransactionMethods for IDBTransaction {
         // IDBTransaction instance with the same name
         // returns the same IDBObjectStore instance.
         let mut store_handles = self.store_handles.borrow_mut();
-        let store = store_handles.entry(name.to_string()).or_insert({
+        let store = store_handles.entry(name.to_string()).or_insert_with(|| {
             let store = IDBObjectStore::new(&self.global(), self.db.get_name(), name, None);
             store.set_transaction(&self);
             Dom::from_ref(&*store)
