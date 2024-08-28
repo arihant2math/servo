@@ -296,17 +296,14 @@ impl IDBTransactionMethods for IDBTransaction {
     }
 
     // https://www.w3.org/TR/IndexedDB-2/#dom-idbtransaction-mode
-    fn Durability(&self) -> IDBTransactionDurability {
-        // FIXME:(arihant2math) Durability is not implemented at all
-        unimplemented!();
-    }
+    // fn Durability(&self) -> IDBTransactionDurability {
+    //     // FIXME:(arihant2math) Durability is not implemented at all
+    //     unimplemented!();
+    // }
 
     // https://www.w3.org/TR/IndexedDB-2/#dom-idbtransaction-error
     fn GetError(&self) -> Option<DomRoot<DOMException>> {
-        // FIXME:(arihant2math) ???
-        // It's weird that the WebIDL specifies that this isn't returning an Option.
-        // "The error attribute’s getter must return this transaction's error, or null if none."
-        unimplemented!();
+        self.error.get()
     }
 
     // https://www.w3.org/TR/IndexedDB-2/#dom-idbtransaction-onabort
