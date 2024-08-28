@@ -143,7 +143,7 @@ impl<E: KvsEngine> IndexedDBEnvironment<E> {
     ) {
         self.engine.delete_store(store_name);
 
-        sender.send(Ok(())).unwrap()
+        let _ = sender.send(Ok(()));
     }
 }
 
@@ -165,42 +165,43 @@ impl IndexedDBManager {
 
 impl IndexedDBManager {
     fn start(&mut self) {
-        if pref!(dom.indexeddb.enabled) {
-            loop {
-                // FIXME:(arihant2math) No message *most likely* means that
-                // the ipc sender has been dropped, so we break the look
-                let message = match self.port.recv() {
-                    Ok(msg) => msg,
-                    Err(e) => match e {
-                        IpcError::Disconnected => {
-                            break;
-                        },
-                        other => Err(other).unwrap(),
+        if !pref!(dom.indexeddb.enabled) {
+            return;
+        }
+        loop {
+            // FIXME:(arihant2math) No message *most likely* means that
+            // the ipc sender has been dropped, so we break the look
+            let message = match self.port.recv() {
+                Ok(msg) => msg,
+                Err(e) => match e {
+                    IpcError::Disconnected => {
+                        break;
                     },
-                };
-                match message {
-                    IndexedDBThreadMsg::Sync(operation) => {
-                        self.handle_sync_operation(operation);
-                    },
-                    IndexedDBThreadMsg::Async(
-                        sender,
-                        origin,
-                        db_name,
-                        store_name,
-                        txn,
-                        mode,
-                        operation,
-                    ) => {
-                        let store_name = SanitizedName::new(store_name);
-                        self.get_database_mut(origin, db_name).map(|db| {
-                            // Queues an operation for a transaction without starting it
-                            db.queue_operation(sender, store_name, txn, mode, operation);
-                            // FIXME:(arihant2math) Schedule transactions properly:
-                            // for now, we start them directly.
-                            db.start_transaction(txn, None);
-                        });
-                    },
-                }
+                    other => Err(other).unwrap(),
+                },
+            };
+            match message {
+                IndexedDBThreadMsg::Sync(operation) => {
+                    self.handle_sync_operation(operation);
+                },
+                IndexedDBThreadMsg::Async(
+                    sender,
+                    origin,
+                    db_name,
+                    store_name,
+                    txn,
+                    mode,
+                    operation,
+                ) => {
+                    let store_name = SanitizedName::new(store_name);
+                    self.get_database_mut(origin, db_name).map(|db| {
+                        // Queues an operation for a transaction without starting it
+                        db.queue_operation(sender, store_name, txn, mode, operation);
+                        // FIXME:(arihant2math) Schedule transactions properly:
+                        // for now, we start them directly.
+                        db.start_transaction(txn, None);
+                    });
+                },
             }
         }
     }
