@@ -28,7 +28,9 @@ impl IndexedDBThreadFactory for IpcSender<IndexedDBThreadMsg> {
         let (chan, port) = ipc::channel().unwrap();
 
         let mut idb_base_dir = PathBuf::new();
-        config_dir.map(|p| idb_base_dir.push(p));
+        if let Some(p) = config_dir {
+            idb_base_dir.push(p);
+        }
         idb_base_dir.push("IndexedDB");
 
         thread::Builder::new()
