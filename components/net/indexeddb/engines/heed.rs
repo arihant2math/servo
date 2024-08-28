@@ -105,11 +105,6 @@ impl KvsEngine for HeedEngine {
             .create_database(&mut write_txn, Some(&*store_name.to_string()))
             .expect("Failed to create idb store");
         store.clear(&mut write_txn).expect("Could not clear store");
-        let open_stores = self.open_stores.read().unwrap();
-        if !open_stores.contains_key(&store_name) {
-            return;
-        }
-        drop(open_stores);
         let mut open_stores = self.open_stores.write().unwrap();
         open_stores.retain(|key, _| key != &store_name);
     }
@@ -146,7 +141,7 @@ impl KvsEngine for HeedEngine {
                             let key: Vec<u8> = bincode::serialize(&key).unwrap();
                             let stores = stores
                                 .read()
-                                .expect("Could not acquire write lock on stores");
+                                .expect("Could not acquire read lock on stores");
                             let store = stores
                                 .get(&request.store_name)
                                 .expect("Could not get store");
