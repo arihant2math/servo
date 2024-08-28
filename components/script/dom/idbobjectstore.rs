@@ -235,7 +235,7 @@ impl IDBObjectStore {
                         if token == "length" && current_val.is_string() {
                             rooted!(in(*cx) let input_val = current_val.to_string());
                             unsafe {
-                                let string_len = JS_GetStringLength(*input_val) as f32;
+                                let string_len = JS_GetStringLength(*input_val);
                                 string_len.to_jsval(*cx, return_val);
                             }
                             break;
@@ -256,13 +256,14 @@ impl IDBObjectStore {
 
                         unsafe {
                             let prop_name_as_utf16: Vec<u16> = token.encode_utf16().collect();
+                            let mut is_descriptor_none: bool = false;
                             let ok = JS_GetOwnUCPropertyDescriptor(
                                 *cx,
                                 object.handle().into(),
                                 prop_name_as_utf16.as_ptr(),
                                 prop_name_as_utf16.len(),
                                 desc.handle_mut().into(),
-                                &mut false,
+                                &mut is_descriptor_none,
                             );
 
                             if !ok {
