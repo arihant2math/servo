@@ -90,10 +90,8 @@ impl OpenRequestListener {
 
         match result {
             Ok(_) => {
-                let cx = GlobalScope::get_cx();
                 let _ac = enter_realm(&*open_request);
-                rooted!(in(*cx) let mut answer = UndefinedValue());
-                open_request.set_result(answer.handle());
+                open_request.set_result(js::jsapi::UndefinedHandleValue);
 
                 let event = Event::new(
                     &global,
