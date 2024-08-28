@@ -19,9 +19,9 @@ interface IDBFactory {
                                     optional [EnforceRange] unsigned long long version);
   [NewObject, Throws] IDBOpenDBRequest deleteDatabase(DOMString name);
 
-  Promise<sequence<IDBDatabaseInfo>> databases();
+  // Promise<sequence<IDBDatabaseInfo>> databases();
 
-  short cmp(any first, any second);
+  // short cmp(any first, any second);
 };
 
 // https://w3c.github.io/IndexedDB/#idbfactory

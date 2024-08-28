@@ -257,24 +257,25 @@ impl IDBOpenDBRequest {
                             response_listener.handle_open_db(name, version, message.to().unwrap());
                         // If an upgrade event was created, it will be responsible for
                         // dispatching the success event
-                        if !did_upgrade {
-                            let request = trusted_request.root();
-                            let global = request.global();
-                            match result {
-                                Ok(db) => {
-                                    request.dispatch_success(&*db);
-                                },
-                                Err(dom_exception) => {
-                                    request.set_result(HandleValue::undefined());
-                                    request.set_error(dom_exception);
-                                    let event = Event::new(
-                                        &global,
-                                        Atom::from("error"),
-                                        EventBubbles::Bubbles,
-                                        EventCancelable::Cancelable,
-                                    );
-                                    event.upcast::<Event>().fire(request.upcast());
-                                }
+                        if did_upgrade {
+                            return;
+                        }
+                        let request = trusted_request.root();
+                        let global = request.global();
+                        match result {
+                            Ok(db) => {
+                                request.dispatch_success(&*db);
+                            },
+                            Err(dom_exception) => {
+                                request.set_result(HandleValue::undefined());
+                                request.set_error(dom_exception);
+                                let event = Event::new(
+                                    &global,
+                                    Atom::from("error"),
+                                    EventBubbles::Bubbles,
+                                    EventCancelable::Cancelable,
+                                );
+                                event.fire(request.upcast());
                             }
                         }
                     }),
