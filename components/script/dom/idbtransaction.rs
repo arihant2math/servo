@@ -196,7 +196,7 @@ impl IDBTransaction {
                         EventBubbles::DoesNotBubble,
                         EventCancelable::NotCancelable,
                     );
-                    event.upcast::<Event>().fire(this.upcast());
+                    event.fire(this.upcast());
                 }),
                 global.upcast(),
             )

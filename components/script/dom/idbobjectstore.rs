@@ -127,13 +127,7 @@ impl IDBObjectStore {
             } else if is_identifier(&path) {
                 true
             } else {
-                let parts = path.split(".");
-                for part in parts {
-                    if !is_identifier(part) {
-                        return false;
-                    }
-                }
-                true
+                path.split(".").all(is_identifier)
             };
         };
 
@@ -143,12 +137,7 @@ impl IDBObjectStore {
                     return false;
                 }
 
-                for path in paths {
-                    if !is_valid(path) {
-                        return false;
-                    }
-                }
-                true
+                paths.iter().all(is_valid)
             },
             StrOrStringSequence::String(path) => is_valid(path),
         }

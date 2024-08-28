@@ -148,9 +148,9 @@ impl KvsEngine for HeedEngine {
                             let result = store.inner.get(&rtxn, &key).expect("Could not get item");
 
                             if let Some(blob) = result {
-                                request.sender.send(Some(blob.to_vec())).unwrap();
+                                let _ = request.sender.send(Some(blob.to_vec()));
                             } else {
-                                request.sender.send(None).unwrap();
+                                let _ = request.sender.send(None);
                             }
                         },
                         _ => {
