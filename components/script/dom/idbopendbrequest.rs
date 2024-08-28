@@ -101,7 +101,7 @@ impl OpenRequestListener {
                     EventBubbles::DoesNotBubble,
                     EventCancelable::NotCancelable,
                 );
-                event.upcast::<Event>().fire(open_request.upcast());
+                event.fire(open_request.upcast());
             },
             Err(_e) => {
                 // FIXME(rasviitanen) Set the error of request to the
@@ -113,7 +113,7 @@ impl OpenRequestListener {
                     EventBubbles::Bubbles,
                     EventCancelable::Cancelable,
                 );
-                event.upcast::<Event>().fire(open_request.upcast());
+                event.fire(open_request.upcast());
             },
         }
     }
@@ -355,7 +355,7 @@ impl IDBOpenDBRequest {
                         EventBubbles::DoesNotBubble,
                         EventCancelable::NotCancelable,
                     );
-                    event.upcast::<Event>().fire(this.upcast());
+                    event.fire(this.upcast());
                 }),
                 global.upcast(),
             )
