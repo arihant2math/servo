@@ -45,6 +45,7 @@ pub struct IDBDatabase {
     upgrade_transaction: MutNullableDom<IDBTransaction>,
 
     // Flags
+    /// https://w3c.github.io/IndexedDB/#connection-close-pending-flag
     closing: Cell<bool>,
 }
 
