@@ -24,7 +24,7 @@ interface IDBFactory {
   // short cmp(any first, any second);
 };
 
-// https://w3c.github.io/IndexedDB/#idbfactory
+// https://w3c.github.io/IndexedDB/#dictdef-idbdatabaseinfo
 dictionary IDBDatabaseInfo {
   DOMString name;
   unsigned long long version;
