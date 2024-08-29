@@ -135,7 +135,7 @@ impl<E: KvsEngine> IndexedDBEnvironment<E> {
     ) {
         self.engine.create_store(store_name, auto_increment);
 
-        sender.send(Ok(())).unwrap();
+        let _ = sender.send(Ok(()));
     }
 
     fn delete_object_store(
@@ -266,6 +266,7 @@ impl IndexedDBManager {
                 self.databases.remove(&idb_description);
 
                 // FIXME:(rasviitanen) Possible security issue?
+                // FIXME:(arihant2math) using remove_dir_all with arbitrary input ...
                 let mut db_dir = self.idb_base_dir.clone();
                 db_dir.push(&idb_description.as_path());
                 if std::fs::remove_dir_all(&db_dir).is_err() {
