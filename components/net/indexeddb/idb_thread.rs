@@ -250,11 +250,11 @@ impl IndexedDBManager {
                             HeedEngine::new(idb_base_dir, &idb_description.as_path()),
                             version.unwrap_or(0),
                         );
-                        sender.send(db.version).unwrap();
+                        let _ = sender.send(db.version);
                         e.insert(db);
                     },
                     Entry::Occupied(db) => {
-                        sender.send(db.get().version).unwrap();
+                        let _ = sender.send(db.get().version);
                     },
                 }
             },
@@ -270,9 +270,9 @@ impl IndexedDBManager {
                 let mut db_dir = self.idb_base_dir.clone();
                 db_dir.push(&idb_description.as_path());
                 if std::fs::remove_dir_all(&db_dir).is_err() {
-                    sender.send(Err(())).unwrap();
+                    let _ = sender.send(Err(()));
                 } else {
-                    sender.send(Ok(())).unwrap();
+                    let _ = sender.send(Ok(()));
                 }
             },
             SyncOperation::HasKeyGenerator(sender, origin, db_name, store_name) => {
@@ -326,7 +326,7 @@ impl IndexedDBManager {
             },
             SyncOperation::Version(sender, origin, db_name) => {
                 if let Some(db) = self.get_database(origin, db_name) {
-                    sender.send(db.version).unwrap();
+                    let _ = sender.send(db.version);
                 };
             },
             SyncOperation::RegisterNewTxn(sender, origin, db_name) => {
@@ -337,7 +337,7 @@ impl IndexedDBManager {
             }
             SyncOperation::Exit(sender) => {
                 // FIXME:(rasviitanen) Nothing to do?
-                let _ = sender.send(IndexedDBThreadReturnType::Exit).unwrap();
+                let _ = sender.send(IndexedDBThreadReturnType::Exit);
             },
         }
     }
