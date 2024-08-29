@@ -110,9 +110,9 @@ impl<E: KvsEngine> IndexedDBEnvironment<E> {
     fn start_transaction(&mut self, txn: u64, sender: Option<IpcSender<Result<(), ()>>>) {
         // FIXME:(arihant2math) find a way to optimizations in this function
         // rather than on the engine level code (less repetition)
-        self.transactions.remove(&txn).map(|txn| {
-            self.engine.process_transaction(txn).blocking_recv();
-        });
+        if let Some(txn) = self.transactions.remove(&txn) {
+            let _ = self.engine.process_transaction(txn).blocking_recv();
+        }
 
         // We have a sender if the transaction is started manually, and they
         // probably want to know when it is finished
@@ -196,13 +196,13 @@ impl IndexedDBManager {
                     operation,
                 ) => {
                     let store_name = SanitizedName::new(store_name);
-                    self.get_database_mut(origin, db_name).map(|db| {
+                    if let Some(db) = self.get_database_mut(origin, db_name) {
                         // Queues an operation for a transaction without starting it
                         db.queue_operation(sender, store_name, txn, mode, operation);
                         // FIXME:(arihant2math) Schedule transactions properly:
                         // for now, we start them directly.
                         db.start_transaction(txn, None);
-                    });
+                    }
                 },
             }
         }
@@ -290,9 +290,9 @@ impl IndexedDBManager {
                     .expect("Could not send commit status");
             },
             SyncOperation::UpgradeVersion(sender, origin, db_name, _txn, version) => {
-                self.get_database_mut(origin, db_name).map(|db| {
+                if let Some(db) = self.get_database_mut(origin, db_name) {
                     db.version = version;
-                });
+                };
 
                 // FIXME:(arihant2math) Get the version from the database instead
                 // We never fail as of now, so we can just return it like this
@@ -309,25 +309,25 @@ impl IndexedDBManager {
                 auto_increment,
             ) => {
                 let store_name = SanitizedName::new(store_name);
-                self.get_database_mut(origin, db_name)
-                    .map(|db| db.create_object_store(sender, store_name, auto_increment));
+                if let Some(db) = self.get_database_mut(origin, db_name) {
+                    db.create_object_store(sender, store_name, auto_increment);
+                }
             },
             SyncOperation::DeleteObjectStore(sender, origin, db_name, store_name) => {
                 let store_name = SanitizedName::new(store_name);
-                self.get_database_mut(origin, db_name)
-                    .map(|db| db.delete_object_store(sender, store_name));
+                if let Some(db) = self.get_database_mut(origin, db_name) {
+                    db.delete_object_store(sender, store_name);
+                }
             },
             SyncOperation::StartTransaction(sender, origin, db_name, txn) => {
-                self.get_database_mut(origin, db_name).map(|db| {
+                if let Some(db) = self.get_database_mut(origin, db_name) {
                     db.start_transaction(txn, Some(sender));
-                });
+                };
             },
             SyncOperation::Version(sender, origin, db_name) => {
-                self.get_database(origin, db_name)
-                    .map(|db| {
-                        sender.send(db.version).unwrap();
-                    })
-                    .unwrap();
+                if let Some(db) = self.get_database(origin, db_name) {
+                    sender.send(db.version).unwrap();
+                };
             },
             SyncOperation::RegisterNewTxn(sender, origin, db_name) => self
                 .get_database_mut(origin, db_name)

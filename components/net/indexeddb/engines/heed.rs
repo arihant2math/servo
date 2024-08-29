@@ -110,6 +110,7 @@ impl KvsEngine for HeedEngine {
     }
 
     fn close_store(&self, store_name: SanitizedName) {
+        // FIXME: (arihant2math) unused
         // FIXME:(arihant2math) return error if no store ...
         let mut open_stores = self.open_stores.write().unwrap();
         open_stores.retain(|key, _| key != &store_name);
