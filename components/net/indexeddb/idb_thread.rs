@@ -329,15 +329,12 @@ impl IndexedDBManager {
                     sender.send(db.version).unwrap();
                 };
             },
-            SyncOperation::RegisterNewTxn(sender, origin, db_name) => self
-                .get_database_mut(origin, db_name)
-                .map(|db| {
+            SyncOperation::RegisterNewTxn(sender, origin, db_name) => {
+                if let Some(db) = self.get_database_mut(origin, db_name) {
                     db.serial_number_counter += 1;
-                    sender
-                        .send(db.serial_number_counter)
-                        .expect("Could not send serial number");
-                })
-                .unwrap(),
+                    let _ = sender.send(db.serial_number_counter);
+                }
+            }
             SyncOperation::Exit(sender) => {
                 // FIXME:(rasviitanen) Nothing to do?
                 let _ = sender.send(IndexedDBThreadReturnType::Exit).unwrap();
