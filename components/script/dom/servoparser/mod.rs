@@ -1560,7 +1560,9 @@ fn create_element_for_token(
         document.decrement_throw_on_dynamic_markup_insertion_counter();
     }
 
-    // TODO: Step 10.
+    // Step 10.
+    // Let element be the result of creating an element given document, localName, namespace, null, is, willExecuteScript, and registry.
+    let element = create_html_element(name, None, is, will_execute_script, CustomElementCreationMode::Asynchronous, can_gc);
     // TODO: Step 11.
 
     // Step 12 is handled in `associate_with_form`.
