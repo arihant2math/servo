@@ -15,6 +15,7 @@ use tokio::sync::{RwLock, oneshot};
 use crate::async_runtime::HANDLE;
 use crate::indexeddb::engines::{KvsEngine, KvsTransaction, SanitizedName};
 
+mod index_model;
 mod metadata_model;
 mod store_model;
 
@@ -59,6 +60,8 @@ impl KvsEngine for SqliteEngine {
             conn.execute(create_table_stmt).await?;
             let create_table_stmt =
                 builder.build(&schema.create_table_from_entity(metadata_model::Entity));
+            conn.execute(create_table_stmt).await?;
+            let create_table_stmt = builder.build(&schema.create_table_from_entity(index_model::Entity));
             conn.execute(create_table_stmt).await?;
             if auto_increment {
                 let metadata = metadata_model::ActiveModel {
