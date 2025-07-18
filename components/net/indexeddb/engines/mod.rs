@@ -4,8 +4,7 @@
 
 use std::collections::VecDeque;
 
-use ipc_channel::ipc::IpcSender;
-use net_traits::indexeddb_thread::{AsyncOperation, IdbResult, IndexedDBTxnMode};
+use net_traits::indexeddb_thread::{AsyncOperation, CreateObjectStoreResult, IndexedDBTxnMode};
 use tokio::sync::oneshot;
 
 pub use self::sqlite::SqliteEngine;
@@ -46,7 +45,6 @@ impl std::fmt::Display for SanitizedName {
 }
 
 pub struct KvsOperation {
-    pub sender: IpcSender<Result<Option<IdbResult>, ()>>,
     pub store_name: SanitizedName,
     pub operation: AsyncOperation,
 }
@@ -60,13 +58,13 @@ pub struct KvsTransaction {
 }
 
 pub trait KvsEngine {
-    type Error;
+    type Error: std::error::Error;
 
     fn create_store(
         &self,
         store_name: SanitizedName,
         auto_increment: bool,
-    ) -> Result<(), Self::Error>;
+    ) -> Result<CreateObjectStoreResult, Self::Error>;
 
     fn delete_store(&self, store_name: SanitizedName) -> Result<(), Self::Error>;
 

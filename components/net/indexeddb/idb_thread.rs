@@ -10,7 +10,8 @@ use std::thread;
 use ipc_channel::ipc::{self, IpcError, IpcReceiver, IpcSender};
 use log::{debug, warn};
 use net_traits::indexeddb_thread::{
-    AsyncOperation, IdbResult, IndexedDBThreadMsg, IndexedDBTxnMode, SyncOperation,
+    AsyncOperation, CreateObjectStoreResult, DbResult, IndexedDBThreadMsg, IndexedDBTxnMode,
+    SyncOperation,
 };
 use servo_config::pref;
 use servo_url::origin::ImmutableOrigin;
@@ -18,6 +19,12 @@ use servo_url::origin::ImmutableOrigin;
 use crate::indexeddb::engines::{
     KvsEngine, KvsOperation, KvsTransaction, SanitizedName, SqliteEngine,
 };
+
+macro_rules! err {
+    ($e:expr) => {
+        Err(format!("{:?}", $e))
+    };
+}
 
 pub trait IndexedDBThreadFactory {
     fn new(config_dir: Option<PathBuf>) -> Self;
@@ -86,7 +93,6 @@ impl<E: KvsEngine> IndexedDBEnvironment<E> {
 
     fn queue_operation(
         &mut self,
-        sender: IpcSender<Result<Option<IdbResult>, ()>>,
         store_name: SanitizedName,
         serial_number: u64,
         mode: IndexedDBTxnMode,
@@ -100,14 +106,13 @@ impl<E: KvsEngine> IndexedDBEnvironment<E> {
             })
             .requests
             .push_back(KvsOperation {
-                sender,
                 operation,
                 store_name,
             });
     }
 
     // Executes all requests for a transaction (without committing)
-    fn start_transaction(&mut self, txn: u64, sender: Option<IpcSender<Result<(), ()>>>) {
+    fn start_transaction(&mut self, txn: u64, sender: Option<IpcSender<DbResult<()>>>) {
         // FIXME:(arihant2math) find a way to optimizations in this function
         // rather than on the engine level code (less repetition)
         if let Some(txn) = self.transactions.remove(&txn) {
@@ -129,40 +134,27 @@ impl<E: KvsEngine> IndexedDBEnvironment<E> {
 
     fn create_object_store(
         &mut self,
-        sender: IpcSender<Result<(), ()>>,
+        sender: IpcSender<DbResult<CreateObjectStoreResult>>,
         store_name: SanitizedName,
         auto_increment: bool,
     ) {
         let result = self.engine.create_store(store_name, auto_increment);
 
-        if result.is_ok() {
-            let _ = sender.send(Ok(()));
-        } else {
-            let _ = sender.send(Err(()));
-        }
+        let _ = sender.send(result.map_err(|e| format!("{:?}", e)));
     }
 
-    fn delete_object_store(
-        &mut self,
-        sender: IpcSender<Result<(), ()>>,
-        store_name: SanitizedName,
-    ) {
+    fn delete_object_store(&mut self, sender: IpcSender<DbResult<()>>, store_name: SanitizedName) {
         let result = self.engine.delete_store(store_name);
 
-        if result.is_ok() {
-            let _ = sender.send(Ok(()));
-        } else {
-            let _ = sender.send(Err(()));
-        }
+        let _ = match result {
+            Ok(_) => sender.send(Ok(())),
+            Err(e) => sender.send(err!(e)),
+        };
     }
 
-    fn delete_database(&mut self, sender: IpcSender<Result<(), ()>>) {
+    fn delete_database(&mut self, sender: IpcSender<DbResult<()>>) {
         let result = self.engine.delete_database();
-        if result.is_ok() {
-            let _ = sender.send(Ok(()));
-        } else {
-            let _ = sender.send(Err(()));
-        }
+        let _ = sender.send(result.map_err(|e| format!("{:?}", e)));
     }
 }
 
@@ -208,19 +200,11 @@ impl IndexedDBManager {
                 IndexedDBThreadMsg::Sync(operation) => {
                     self.handle_sync_operation(operation);
                 },
-                IndexedDBThreadMsg::Async(
-                    sender,
-                    origin,
-                    db_name,
-                    store_name,
-                    txn,
-                    mode,
-                    operation,
-                ) => {
+                IndexedDBThreadMsg::Async(origin, db_name, store_name, txn, mode, operation) => {
                     let store_name = SanitizedName::new(store_name);
                     if let Some(db) = self.get_database_mut(origin, db_name) {
                         // Queues an operation for a transaction without starting it
-                        db.queue_operation(sender, store_name, txn, mode, operation);
+                        db.queue_operation(store_name, txn, mode, operation);
                         // FIXME:(arihant2math) Schedule transactions properly:
                         // for now, we start them directly.
                         db.start_transaction(txn, None);
@@ -308,13 +292,12 @@ impl IndexedDBManager {
                 let store_name = SanitizedName::new(store_name);
                 let result = self
                     .get_database(origin, db_name)
-                    .map(|db| db.has_key_generator(store_name))
-                    .expect("No Database");
-                sender.send(result).expect("Could not send generator info");
+                    .map(|db| db.has_key_generator(store_name));
+                let _ = sender.send(result);
             },
             SyncOperation::Commit(sender, _origin, _db_name, _txn) => {
                 // FIXME:(arihant2math) This does nothing at the moment
-                sender.send(Err(())).expect("Could not send commit status");
+                let _ = sender.send(Ok(()));
             },
             SyncOperation::UpgradeVersion(sender, origin, db_name, _txn, version) => {
                 if let Some(db) = self.get_database_mut(origin, db_name) {
@@ -322,9 +305,9 @@ impl IndexedDBManager {
                         db.version = version;
                     }
                     // erroring out if the version is not upgraded can be and non-replicable
-                    let _ = sender.send(Ok(db.version));
+                    let _ = sender.send(Some(db.version));
                 } else {
-                    let _ = sender.send(Err(()));
+                    let _ = sender.send(None);
                 }
             },
             SyncOperation::CreateObjectStore(
@@ -352,7 +335,7 @@ impl IndexedDBManager {
             },
             SyncOperation::Version(sender, origin, db_name) => {
                 if let Some(db) = self.get_database(origin, db_name) {
-                    let _ = sender.send(db.version);
+                    let _ = sender.send(Ok(db.version));
                 };
             },
             SyncOperation::RegisterNewTxn(sender, origin, db_name) => {
