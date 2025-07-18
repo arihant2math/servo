@@ -5,8 +5,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use itertools::Itertools;
+use log::error;
 use net_traits::indexeddb_thread::{
-    AsyncOperation, AsyncReadOnlyOperation, AsyncReadWriteOperation, IdbResult,
+    AsyncOperation, AsyncReadOnlyOperation, AsyncReadWriteOperation, CreateObjectStoreResult,
+    IndexedDBKeyType, PutItemResult,
 };
 use sea_orm::prelude::*;
 use sea_orm::{Database, NotSet, Set};
@@ -18,6 +21,12 @@ use crate::indexeddb::engines::{KvsEngine, KvsTransaction, SanitizedName};
 mod index_model;
 mod metadata_model;
 mod store_model;
+
+macro_rules! err {
+    ($e:expr) => {
+        Err(format!("{:?}", $e))
+    };
+}
 
 pub struct SqliteEngine {
     db_dir: PathBuf,
@@ -39,20 +48,19 @@ impl SqliteEngine {
 }
 
 impl KvsEngine for SqliteEngine {
-    type Error = sea_orm::error::DbErr;
+    type Error = DbErr;
 
     fn create_store(
         &self,
         store_name: SanitizedName,
         auto_increment: bool,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<CreateObjectStoreResult, Self::Error> {
         HANDLE.block_on(async {
-            let conn = Database::connect(&format!(
-                "sqlite://{}/{}.db",
-                self.db_dir.display(),
-                store_name.name
-            ))
-            .await?;
+            let path = PathBuf::from(&self.db_dir).join(format!("{}.db", store_name.name));
+            if path.exists() {
+                return Ok(CreateObjectStoreResult::AlreadyExists);
+            }
+            let conn = Database::connect(&format!("sqlite://{}", path.display(),)).await?;
             let builder = conn.get_database_backend();
             let schema = sea_orm::Schema::new(builder);
             let create_table_stmt =
@@ -61,7 +69,8 @@ impl KvsEngine for SqliteEngine {
             let create_table_stmt =
                 builder.build(&schema.create_table_from_entity(metadata_model::Entity));
             conn.execute(create_table_stmt).await?;
-            let create_table_stmt = builder.build(&schema.create_table_from_entity(index_model::Entity));
+            let create_table_stmt =
+                builder.build(&schema.create_table_from_entity(index_model::Entity));
             conn.execute(create_table_stmt).await?;
             if auto_increment {
                 let metadata = metadata_model::ActiveModel {
@@ -79,7 +88,7 @@ impl KvsEngine for SqliteEngine {
 
             let mut connections = self.connections.write().await;
             connections.insert(store_name.clone(), conn);
-            Ok(())
+            Ok(CreateObjectStoreResult::Created)
         })
     }
 
@@ -92,8 +101,9 @@ impl KvsEngine for SqliteEngine {
                 conn.close().await?;
                 let db_path = self.db_dir.join(format!("{}.db", store_name.name));
                 if db_path.exists() {
-                    // TODO: log if error occurs
-                    let _ = std::fs::remove_file(db_path);
+                    if let Err(e) = std::fs::remove_file(db_path) {
+                        error!("Could not remove existing indexeddb store: {:?}", e);
+                    }
                 }
             }
             Ok(())
@@ -135,8 +145,6 @@ impl KvsEngine for SqliteEngine {
 
         // TODO: maybe use different pools for different transactions?
         HANDLE.spawn(async move {
-            let mut results = Vec::with_capacity(transaction.requests.len());
-
             for request in transaction.requests {
                 let connections_reader = connections.read().await;
                 let conn = match connections_reader.get(&request.store_name) {
@@ -149,90 +157,108 @@ impl KvsEngine for SqliteEngine {
                 };
 
                 match request.operation {
-                    AsyncOperation::ReadWrite(AsyncReadWriteOperation::PutItem(
+                    AsyncOperation::ReadWrite(AsyncReadWriteOperation::PutItem {
+                        sender,
                         key,
                         value,
-                        overwrite,
-                    )) => {
-                        let serialized_key: Vec<u8> = bincode::serialize(&key).unwrap();
+                        should_overwrite,
+                    }) => {
+                        let serialized_key: Vec<u8> = match bincode::serialize(&key) {
+                            Ok(key) => key,
+                            Err(e) => {
+                                let _ = sender.send(err!(e));
+                                break;
+                            },
+                        };
                         let store = store_model::ActiveModel {
                             id: NotSet,
                             key: Set(serialized_key.clone()),
                             value: Set(value),
                         };
-                        if overwrite ||
+                        if should_overwrite ||
                             store_model::Entity::find()
                                 .filter(store_model::Column::Key.eq(serialized_key.clone()))
                                 .one(conn)
                                 .await
-                                .unwrap()
+                                .unwrap() // TODO: handle
                                 .is_none()
                         {
-                            if store.insert(conn).await.is_ok() {
-                                results.push((request.sender, Ok(Some(IdbResult::Key(key)))));
-                            } else {
-                                results.push((request.sender, Err(())));
+                            match store.insert(conn).await {
+                                Ok(_) => {
+                                    let _ = sender.send(Ok(PutItemResult::Success));
+                                },
+                                Err(e) => {
+                                    let _ = sender.send(err!(e));
+                                },
                             }
                         } else {
-                            results.push((request.sender, Err(())));
+                            let _ = sender.send(Ok(PutItemResult::CannotOverwrite));
                         }
                     },
-                    AsyncOperation::ReadOnly(AsyncReadOnlyOperation::GetItem(key)) => {
+                    AsyncOperation::ReadOnly(AsyncReadOnlyOperation::GetItem { sender, key }) => {
                         let serialized_key: Vec<u8> = bincode::serialize(&key).unwrap();
                         let result = store_model::Entity::find()
                             .filter(store_model::Column::Key.eq(serialized_key))
                             .one(conn)
                             .await;
-                        if let Ok(result) = result {
-                            results.push((
-                                request.sender,
-                                Ok(result.map(|blob| IdbResult::Data(blob.value.to_vec()))),
-                            ));
-                        } else {
-                            results.push((request.sender, Err(())));
+
+                        match result {
+                            Ok(result) => {
+                                let _ = sender.send(Ok(result.map(|blob| blob.value.to_vec())));
+                            },
+                            Err(e) => {
+                                let _ = sender.send(err!(e));
+                            },
                         }
                     },
-                    AsyncOperation::ReadWrite(AsyncReadWriteOperation::RemoveItem(key)) => {
+                    AsyncOperation::ReadWrite(AsyncReadWriteOperation::RemoveItem {
+                        sender,
+                        key,
+                    }) => {
                         let serialized_key: Vec<u8> = bincode::serialize(&key).unwrap();
                         // More ergonomic way to delete an item than querying first.
                         let result = store_model::Entity::delete_many()
                             .filter(store_model::Column::Key.eq(serialized_key))
                             .exec(conn)
-                            .await
-                            .map_err(|_| ())
-                            .map(|delete_result| {
-                                if delete_result.rows_affected > 0 {
-                                    Some(IdbResult::Key(key))
-                                } else {
-                                    None
-                                }
-                            });
-                        results.push((request.sender, result));
-                    },
-                    AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Count(key)) => {
-                        let serialized_key: Vec<u8> = bincode::serialize(&key).unwrap();
-                        let count = store_model::Entity::find()
-                            .filter(store_model::Column::Key.eq(serialized_key))
-                            .count(conn)
                             .await;
-                        // TODO: return the count as an IdbResult
-                        match count {
-                            Ok(_count) => results.push((request.sender, Ok(None))),
-                            Err(_) => results.push((request.sender, Err(()))),
+                        if let Err(err) = result {
+                            let _ = sender.send(err!(err));
+                        } else {
+                            let _ = sender.send(Ok(()));
                         }
                     },
-                    AsyncOperation::ReadWrite(AsyncReadWriteOperation::Clear) => {
-                        let result = store_model::Entity::delete_many().exec(conn).await;
-                        match result {
-                            Ok(_) => results.push((request.sender, Ok(None))),
-                            Err(_) => results.push((request.sender, Err(()))),
+                    AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Count {
+                        sender,
+                        key_range,
+                    }) => {
+                        let res = store_model::Entity::find().all(conn).await;
+                        match res {
+                            Ok(list) => {
+                                let count = list
+                                    .iter()
+                                    .filter(|s| {
+                                        let key: IndexedDBKeyType =
+                                            bincode::deserialize(&s.key).unwrap();
+                                        key_range.contains(&key)
+                                    })
+                                    .try_len()
+                                    .unwrap_or(0);
+                                // TODO: make that return usize instead of u64
+                                let _ = sender.send(Ok(count as u64));
+                            },
+                            Err(e) => {
+                                let _ = sender.send(err!(e));
+                            },
                         }
+                    },
+                    AsyncOperation::ReadWrite(AsyncReadWriteOperation::Clear(sender)) => {
+                        let result = store_model::Entity::delete_many().exec(conn).await;
+                        let _ = match result {
+                            Ok(_) => sender.send(Ok(())),
+                            Err(e) => sender.send(err!(e)),
+                        };
                     },
                 }
-            }
-
-            for (sender, result) in results {
-                let _ = sender.send(result);
             }
         });
         rx

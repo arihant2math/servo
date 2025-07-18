@@ -5,12 +5,12 @@
 use std::cmp::{PartialEq, PartialOrd};
 
 use ipc_channel::ipc::IpcSender;
+use malloc_size_of_derive::MallocSizeOf;
 use serde::{Deserialize, Serialize};
 use servo_url::origin::ImmutableOrigin;
-use malloc_size_of_derive::MallocSizeOf;
 
-// std::error::Error implemented debug, could be useful for displaying the error
-pub type DbError = Box<dyn std::error::Error + Send + Sync>;
+// TODO Box<dyn Error> is not serializable, fix needs to be found
+pub type DbError = String;
 pub type DbResult<T> = Result<T, DbError>;
 
 // https://www.w3.org/TR/IndexedDB-2/#enumdef-idbtransactionmode
@@ -143,7 +143,12 @@ impl IndexedDBKeyRange {
         Self::from(key)
     }
 
-    pub fn new(lower: Option<IndexedDBKeyType>, upper: Option<IndexedDBKeyType>, lower_open: bool, upper_open: bool) -> Self {
+    pub fn new(
+        lower: Option<IndexedDBKeyType>,
+        upper: Option<IndexedDBKeyType>,
+        lower_open: bool,
+        upper_open: bool,
+    ) -> Self {
         IndexedDBKeyRange {
             lower,
             upper,
@@ -205,7 +210,7 @@ pub enum AsyncReadOnlyOperation {
 
     Count {
         sender: IpcSender<DbResult<u64>>,
-        key: IndexedDBKeyType,
+        key_range: IndexedDBKeyRange,
     },
 }
 
@@ -246,7 +251,7 @@ pub enum CreateObjectStoreResult {
 pub enum SyncOperation {
     /// Upgrades the version of the database
     UpgradeVersion(
-        IpcSender<DbResult<u64>>,
+        IpcSender<Option<u64>>,
         ImmutableOrigin,
         String, // Database
         u64,    // Serial number for the transaction
@@ -254,7 +259,7 @@ pub enum SyncOperation {
     ),
     /// Checks if an object store has a key generator, used in e.g. Put
     HasKeyGenerator(
-        IpcSender<DbResult<bool>>,
+        IpcSender<Option<bool>>,
         ImmutableOrigin,
         String, // Database
         String, // Store

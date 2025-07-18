@@ -104,7 +104,8 @@ impl IDBDatabase {
             .get_idb_thread()
             .send(IndexedDBThreadMsg::Sync(operation));
 
-        receiver.recv().unwrap()
+        // TODO: handle error
+        receiver.recv().unwrap().unwrap_or_else(|_| u64::MAX)
     }
 
     pub fn set_transaction(&self, transaction: &IDBTransaction) {
