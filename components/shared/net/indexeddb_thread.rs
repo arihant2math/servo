@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use std::cmp::{PartialEq, PartialOrd};
+use std::cmp::{Ordering, PartialEq, PartialOrd};
 
 use ipc_channel::ipc::IpcSender;
 use malloc_size_of_derive::MallocSizeOf;
@@ -35,7 +35,7 @@ pub enum IndexedDBKeyType {
 
 /// <https://www.w3.org/TR/IndexedDB-2/#compare-two-keys>
 impl PartialOrd for IndexedDBKeyType {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         // 1. Let ta be the type of a.
         // 2. Let tb be the type of b.
 
@@ -69,7 +69,7 @@ impl PartialOrd for IndexedDBKeyType {
                 IndexedDBKeyType::Date(_) |
                 IndexedDBKeyType::Number(_),
                 IndexedDBKeyType::Binary(_),
-            ) => Some(std::cmp::Ordering::Less),
+            ) => Some(Ordering::Less),
             // Step 7: If ta is string and tb is date or number, return 1.
             (
                 IndexedDBKeyType::String(_),
@@ -108,8 +108,8 @@ impl PartialEq for IndexedDBKeyType {
     fn eq(&self, other: &Self) -> bool {
         let cmp = self.partial_cmp(other);
         match cmp {
-            Some(std::cmp::Ordering::Equal) => true,
-            Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Greater) => false,
+            Some(Ordering::Equal) => true,
+            Some(Ordering::Less) | Some(Ordering::Greater) => false,
             None => {
                 // If we can't compare the two keys, we assume they are not equal.
                 false
