@@ -104,8 +104,10 @@ impl IDBDatabase {
             .get_idb_thread()
             .send(IndexedDBThreadMsg::Sync(operation));
 
-        // TODO: handle error
-        receiver.recv().unwrap().unwrap_or_else(|_| u64::MAX)
+        receiver.recv().unwrap().unwrap_or_else(|e| {
+            error!("{e:?}");
+            u64::MAX
+        })
     }
 
     pub fn set_transaction(&self, transaction: &IDBTransaction) {
@@ -186,7 +188,6 @@ impl IDBDatabaseMethods<crate::DomTypeHolder> for IDBDatabase {
         name: DOMString,
         options: &IDBObjectStoreParameters,
     ) -> Fallible<DomRoot<IDBObjectStore>> {
-        // FIXME:(arihant2math) ^^ Change idl to match above.
         // Step 2
         let upgrade_transaction = match self.upgrade_transaction.get() {
             Some(txn) => txn,
