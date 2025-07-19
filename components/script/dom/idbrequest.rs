@@ -14,7 +14,6 @@ use net_traits::IpcSend;
 use net_traits::indexeddb_thread::{
     AsyncOperation, DbResult, IndexedDBKeyType, IndexedDBThreadMsg, IndexedDBTxnMode, PutItemResult,
 };
-use profile_traits::ipc;
 use profile_traits::ipc::IpcReceiver;
 use serde::{Deserialize, Serialize};
 use stylo_atoms::Atom;
@@ -35,12 +34,9 @@ use crate::dom::eventtarget::EventTarget;
 use crate::dom::globalscope::GlobalScope;
 use crate::dom::idbobjectstore::IDBObjectStore;
 use crate::dom::idbtransaction::IDBTransaction;
-use crate::indexed_db;
 use crate::indexed_db::key_type_to_jsval;
 use crate::realms::enter_realm;
 use crate::script_runtime::{CanGc, JSContext as SafeJSContext};
-
-type HandlerFn<T> = dyn FnOnce(T) -> IdbResult;
 
 #[derive(Clone)]
 struct RequestListener {
