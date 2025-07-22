@@ -275,6 +275,13 @@ pub enum SyncOperation {
         String, // Database
         String, // Store
     ),
+    /// Gets an object stores key path
+    KeyPath(
+        IpcSender<Option<Option<Vec<String>>>>,
+        ImmutableOrigin,
+        String, // Database
+        String, // Store
+    ),
 
     /// Commits changes of a transaction to the database
     Commit(

@@ -82,6 +82,7 @@ pub trait KvsEngine {
     ) -> oneshot::Receiver<Option<Vec<u8>>>;
 
     fn has_key_generator(&self, store_name: SanitizedName) -> bool;
+    fn key_path(&self, store_name: SanitizedName) -> Option<Vec<String>>;
 
     fn version(&self) -> u64;
     fn set_version(&self, version: u64) -> Result<(), Self::Error>;

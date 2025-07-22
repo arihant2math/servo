@@ -338,6 +338,25 @@ impl KvsEngine for SqliteEngine {
         })
     }
 
+    fn key_path(&self, store_name: SanitizedName) -> Option<Vec<String>> {
+        HANDLE.block_on(async {
+            if let Some(model) = object_store_model::Entity::find()
+                .filter(object_store_model::Column::Name.eq(store_name.to_string()))
+                .one(&self.connection)
+                .await
+                .unwrap()
+            {
+                model.key_path.map(|key_path| {
+                    key_path.split(",")
+                        .map(|s| s.to_string())
+                        .collect::<Vec<String>>()
+                })
+            } else {
+                None
+            }
+        })
+    }
+
     fn version(&self) -> u64 {
         HANDLE.block_on(async {
             let db_info = database_model::Entity::find()
