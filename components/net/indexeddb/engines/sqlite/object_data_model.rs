@@ -5,7 +5,7 @@
 use sea_orm::prelude::*;
 
 #[derive(Clone, Debug, DeriveEntityModel, Eq, PartialEq)]
-#[sea_orm(table_name = "object_store")]
+#[sea_orm(table_name = "object_data")]
 pub struct Model {
     #[sea_orm(primary_key)]
     pub object_store_id: i32,

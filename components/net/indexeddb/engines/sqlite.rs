@@ -147,7 +147,7 @@ impl KvsEngine for SqliteEngine {
         HANDLE.block_on(async {
             self.connection.close().await?;
             if self.db_path.exists() {
-                std::fs::remove_dir_all(&self.db_path).unwrap();
+                std::fs::remove_dir_all(&self.db_path.parent().unwrap()).unwrap();
             }
             Ok(())
         })
