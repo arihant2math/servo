@@ -14,7 +14,7 @@ pub type DbError = String;
 pub type DbResult<T> = Result<T, DbError>;
 
 // https://www.w3.org/TR/IndexedDB-2/#enumdef-idbtransactionmode
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum IndexedDBTxnMode {
     Readonly,
     Readwrite,
@@ -192,6 +192,17 @@ impl IndexedDBKeyRange {
             .is_none_or(|upper| key < upper || (!self.upper_open && key == upper));
         lower_bound_condition && upper_bound_condition
     }
+
+    pub fn is_singleton(&self) -> bool {
+        self.lower == self.upper && !self.lower_open && !self.upper_open
+    }
+
+    pub fn as_singleton(&self) -> Option<&IndexedDBKeyType> {
+        if self.is_singleton() {
+            return Some(self.lower.as_ref().unwrap());
+        }
+        None
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -277,8 +288,9 @@ pub enum SyncOperation {
     CreateObjectStore(
         IpcSender<DbResult<CreateObjectStoreResult>>,
         ImmutableOrigin,
-        String, // Database
-        String, // Store
+        String,              // Database
+        String,              // Store
+        Option<Vec<String>>, // Key Path
         bool,
     ),
 

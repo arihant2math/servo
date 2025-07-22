@@ -17,7 +17,7 @@ use servo_config::pref;
 use servo_url::origin::ImmutableOrigin;
 
 use crate::indexeddb::engines::{
-    KvsEngine, KvsOperation, KvsTransaction, SanitizedName, SqliteEngine,
+    IndexedDBDescription, KvsEngine, KvsOperation, KvsTransaction, SanitizedName, SqliteEngine,
 };
 
 macro_rules! err {
@@ -51,41 +51,17 @@ impl IndexedDBThreadFactory for IpcSender<IndexedDBThreadMsg> {
     }
 }
 
-#[derive(Clone, Eq, Hash, PartialEq)]
-pub struct IndexedDBDescription {
-    origin: ImmutableOrigin,
-    name: String,
-}
-
-impl IndexedDBDescription {
-    // Converts the database description to a folder name where all
-    // data for this database is stored
-    fn as_path(&self) -> PathBuf {
-        let mut path = PathBuf::new();
-
-        let sanitized_origin = SanitizedName::new(self.origin.ascii_serialization());
-        let sanitized_name = SanitizedName::new(self.name.clone());
-        path.push(sanitized_origin.to_string());
-        path.push(sanitized_name.to_string());
-
-        path
-    }
-}
-
 struct IndexedDBEnvironment<E: KvsEngine> {
     engine: E,
-    version: u64,
 
     transactions: HashMap<u64, KvsTransaction>,
     serial_number_counter: u64,
 }
 
 impl<E: KvsEngine> IndexedDBEnvironment<E> {
-    fn new(engine: E, version: u64) -> IndexedDBEnvironment<E> {
+    fn new(engine: E) -> IndexedDBEnvironment<E> {
         IndexedDBEnvironment {
             engine,
-            version,
-
             transactions: HashMap::new(),
             serial_number_counter: 0,
         }
@@ -113,8 +89,8 @@ impl<E: KvsEngine> IndexedDBEnvironment<E> {
 
     // Executes all requests for a transaction (without committing)
     fn start_transaction(&mut self, txn: u64, sender: Option<IpcSender<DbResult<()>>>) {
-        // FIXME:(arihant2math) find a way to optimizations in this function
-        // rather than on the engine level code (less repetition)
+        // FIXME:(arihant2math) find optimizations in this function
+        //   rather than on the engine level code (less repetition)
         if let Some(txn) = self.transactions.remove(&txn) {
             let _ = self.engine.process_transaction(txn).blocking_recv();
         }
@@ -136,9 +112,12 @@ impl<E: KvsEngine> IndexedDBEnvironment<E> {
         &mut self,
         sender: IpcSender<DbResult<CreateObjectStoreResult>>,
         store_name: SanitizedName,
+        key_path: Option<Vec<String>>,
         auto_increment: bool,
     ) {
-        let result = self.engine.create_store(store_name, auto_increment);
+        let result = self
+            .engine
+            .create_store(store_name, key_path, auto_increment);
 
         let _ = sender.send(result.map_err(|e| format!("{:?}", e)));
     }
@@ -152,7 +131,7 @@ impl<E: KvsEngine> IndexedDBEnvironment<E> {
         };
     }
 
-    fn delete_database(&mut self, sender: IpcSender<DbResult<()>>) {
+    fn delete_database(self, sender: IpcSender<DbResult<()>>) {
         let result = self.engine.delete_database();
         let _ = sender.send(result.map_err(|e| format!("{:?}", e)));
     }
@@ -205,8 +184,10 @@ impl IndexedDBManager {
                     if let Some(db) = self.get_database_mut(origin, db_name) {
                         // Queues an operation for a transaction without starting it
                         db.queue_operation(store_name, txn, mode, operation);
-                        // FIXME:(arihant2math) Schedule transactions properly:
-                        // for now, we start them directly.
+                        // FIXME:(arihant2math) Schedule transactions properly
+                        // while db.transactions.iter().any(|s| s.1.mode == IndexedDBTxnMode::Readwrite) {
+                        //     std::hint::spin_loop();
+                        // }
                         db.start_transaction(txn, None);
                     }
                 },
@@ -262,15 +243,16 @@ impl IndexedDBManager {
 
                 match self.databases.entry(idb_description.clone()) {
                     Entry::Vacant(e) => {
-                        let db = IndexedDBEnvironment::new(
-                            SqliteEngine::new(idb_base_dir, &idb_description.as_path()),
+                        let db = IndexedDBEnvironment::new(SqliteEngine::new(
+                            idb_base_dir,
+                            &idb_description,
                             version.unwrap_or(0),
-                        );
-                        let _ = sender.send(db.version);
+                        ));
+                        let _ = sender.send(db.engine.version());
                         e.insert(db);
                     },
                     Entry::Occupied(db) => {
-                        let _ = sender.send(db.get().version);
+                        let _ = sender.send(db.get().engine.version());
                     },
                 }
             },
@@ -301,11 +283,11 @@ impl IndexedDBManager {
             },
             SyncOperation::UpgradeVersion(sender, origin, db_name, _txn, version) => {
                 if let Some(db) = self.get_database_mut(origin, db_name) {
-                    if version > db.version {
-                        db.version = version;
+                    if version > db.engine.version() {
+                        db.engine.set_version(version);
                     }
                     // erroring out if the version is not upgraded can be and non-replicable
-                    let _ = sender.send(Some(db.version));
+                    let _ = sender.send(Some(db.engine.version()));
                 } else {
                     let _ = sender.send(None);
                 }
@@ -315,11 +297,12 @@ impl IndexedDBManager {
                 origin,
                 db_name,
                 store_name,
+                key_paths,
                 auto_increment,
             ) => {
                 let store_name = SanitizedName::new(store_name);
                 if let Some(db) = self.get_database_mut(origin, db_name) {
-                    db.create_object_store(sender, store_name, auto_increment);
+                    db.create_object_store(sender, store_name, key_paths, auto_increment);
                 }
             },
             SyncOperation::DeleteObjectStore(sender, origin, db_name, store_name) => {
@@ -335,7 +318,7 @@ impl IndexedDBManager {
             },
             SyncOperation::Version(sender, origin, db_name) => {
                 if let Some(db) = self.get_database(origin, db_name) {
-                    let _ = sender.send(Ok(db.version));
+                    let _ = sender.send(Ok(db.engine.version()));
                 };
             },
             SyncOperation::RegisterNewTxn(sender, origin, db_name) => {
