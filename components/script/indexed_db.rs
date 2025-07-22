@@ -249,7 +249,7 @@ pub fn evaluate_key_path_on_value(
                             has_prop = true;
                         } else {
                             // If we get here it means the object doesn't have the property or the
-                            // property is available throuch a getter. We don't want to call any
+                            // property is available through a getter. We don't want to call any
                             // getters to avoid potential re-entrancy.
                             // The blob object is special since its properties are available
                             // only through getters but we still want to support them for key

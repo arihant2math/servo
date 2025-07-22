@@ -108,6 +108,10 @@ impl<E: KvsEngine> IndexedDBEnvironment<E> {
         self.engine.has_key_generator(store_name)
     }
 
+    fn key_path(&self, store_name: SanitizedName) -> Option<Vec<String>> {
+        self.engine.key_path(store_name)
+    }
+
     fn create_object_store(
         &mut self,
         sender: IpcSender<DbResult<CreateObjectStoreResult>>,
@@ -277,6 +281,13 @@ impl IndexedDBManager {
                     .map(|db| db.has_key_generator(store_name));
                 let _ = sender.send(result);
             },
+            SyncOperation::KeyPath(sender, origin, db_name, store_name) => {
+                let store_name = SanitizedName::new(store_name);
+                let result = self
+                    .get_database(origin, db_name)
+                    .map(|db| db.key_path(store_name));
+                let _ = sender.send(result);
+            }
             SyncOperation::Commit(sender, _origin, _db_name, _txn) => {
                 // FIXME:(arihant2math) This does nothing at the moment
                 let _ = sender.send(Ok(()));
