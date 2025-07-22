@@ -7,7 +7,7 @@ use sea_orm::prelude::*;
 #[derive(Clone, Debug, DeriveEntityModel, Eq, PartialEq)]
 #[sea_orm(table_name = "database")]
 pub struct Model {
-    #[sea_orm(primary_key, unique)]
+    #[sea_orm(primary_key, auto_increment = false)]
     pub name: String,
     pub origin: String,
     #[sea_orm(default_value = 0)]
