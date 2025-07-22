@@ -136,7 +136,7 @@ impl KvsEngine for SqliteEngine {
         })
     }
 
-    fn close_store(&self, store_name: SanitizedName) -> Result<(), Self::Error> {
+    fn close_store(&self, _store_name: SanitizedName) -> Result<(), Self::Error> {
         HANDLE.block_on(async {
             // TODO: do something
             Ok(())

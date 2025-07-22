@@ -264,7 +264,7 @@ impl IndexedDBManager {
                     origin,
                     name: db_name,
                 };
-                if let Some(mut db) = self.databases.remove(&idb_description) {
+                if let Some(db) = self.databases.remove(&idb_description) {
                     db.delete_database(sender);
                 } else {
                     let _ = sender.send(Ok(()));
@@ -284,7 +284,7 @@ impl IndexedDBManager {
             SyncOperation::UpgradeVersion(sender, origin, db_name, _txn, version) => {
                 if let Some(db) = self.get_database_mut(origin, db_name) {
                     if version > db.engine.version() {
-                        db.engine.set_version(version);
+                        let _ = db.engine.set_version(version);
                     }
                     // erroring out if the version is not upgraded can be and non-replicable
                     let _ = sender.send(Some(db.engine.version()));
