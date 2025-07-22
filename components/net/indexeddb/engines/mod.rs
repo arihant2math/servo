@@ -3,8 +3,10 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 
 use net_traits::indexeddb_thread::{AsyncOperation, CreateObjectStoreResult, IndexedDBTxnMode};
+use servo_url::ImmutableOrigin;
 use tokio::sync::oneshot;
 
 pub use self::sqlite::SqliteEngine;
@@ -63,6 +65,7 @@ pub trait KvsEngine {
     fn create_store(
         &self,
         store_name: SanitizedName,
+        key_path: Option<Vec<String>>,
         auto_increment: bool,
     ) -> Result<CreateObjectStoreResult, Self::Error>;
 
@@ -71,7 +74,7 @@ pub trait KvsEngine {
     #[expect(dead_code)]
     fn close_store(&self, store_name: SanitizedName) -> Result<(), Self::Error>;
 
-    fn delete_database(&self) -> Result<(), Self::Error>;
+    fn delete_database(self) -> Result<(), Self::Error>;
 
     fn process_transaction(
         &self,
@@ -79,4 +82,28 @@ pub trait KvsEngine {
     ) -> oneshot::Receiver<Option<Vec<u8>>>;
 
     fn has_key_generator(&self, store_name: SanitizedName) -> bool;
+
+    fn version(&self) -> u64;
+    fn set_version(&self, version: u64) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub struct IndexedDBDescription {
+    pub origin: ImmutableOrigin,
+    pub name: String,
+}
+
+impl IndexedDBDescription {
+    // Converts the database description to a folder name where all
+    // data for this database is stored
+    pub fn as_path(&self) -> PathBuf {
+        let mut path = PathBuf::new();
+
+        let sanitized_origin = SanitizedName::new(self.origin.ascii_serialization());
+        let sanitized_name = SanitizedName::new(self.name.clone());
+        path.push(sanitized_origin.to_string());
+        path.push(sanitized_name.to_string());
+
+        path
+    }
 }

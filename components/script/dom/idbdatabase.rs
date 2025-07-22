@@ -249,11 +249,20 @@ impl IDBDatabaseMethods<crate::DomTypeHolder> for IDBDatabase {
 
         let (sender, receiver) = ipc::channel(self.global().time_profiler_chan().clone()).unwrap();
 
+        let key_paths = key_path.map(|p| match p {
+            StringOrStringSequence::String(s) => {
+                vec![s.to_string()]
+            },
+            StringOrStringSequence::StringSequence(s) => {
+                s.clone().into_iter().map(|s| s.to_string()).collect()
+            },
+        });
         let operation = SyncOperation::CreateObjectStore(
             sender,
             self.global().origin().immutable().clone(),
             self.name.to_string(),
             name.to_string(),
+            key_paths,
             auto_increment,
         );
 
