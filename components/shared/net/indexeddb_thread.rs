@@ -13,6 +13,12 @@ use servo_url::origin::ImmutableOrigin;
 pub type DbError = String;
 pub type DbResult<T> = Result<T, DbError>;
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum KeyPath {
+    String(String),
+    Sequence(Vec<String>)
+}
+
 // https://www.w3.org/TR/IndexedDB-2/#enumdef-idbtransactionmode
 #[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum IndexedDBTxnMode {
@@ -253,7 +259,7 @@ pub enum AsyncOperation {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub enum CreateObjectStoreResult {
+pub enum CreateObjectResult {
     Created,
     AlreadyExists,
 }
@@ -277,7 +283,7 @@ pub enum SyncOperation {
     ),
     /// Gets an object stores key path
     KeyPath(
-        IpcSender<Option<Option<Vec<String>>>>,
+        IpcSender<Option<Option<KeyPath>>>,
         ImmutableOrigin,
         String, // Database
         String, // Store
@@ -291,13 +297,33 @@ pub enum SyncOperation {
         u64,    // Transaction serial number
     ),
 
-    /// Creates a new store for the database
-    CreateObjectStore(
-        IpcSender<DbResult<CreateObjectStoreResult>>,
+    /// Creates a new index for the database
+    CreateIndex(
+        IpcSender<DbResult<CreateObjectResult>>,
         ImmutableOrigin,
         String,              // Database
         String,              // Store
-        Option<Vec<String>>, // Key Path
+        String,              // Index name
+        KeyPath,              // key path
+        bool,                // unique flag
+        bool,                // multientry flag
+    ),
+    /// Delete an index
+    DeleteIndex(
+        IpcSender<DbResult<()>>,
+        ImmutableOrigin,
+        String,              // Database
+        String,              // Store
+        String,              // Index name
+    ),
+
+    /// Creates a new store for the database
+    CreateObjectStore(
+        IpcSender<DbResult<CreateObjectResult>>,
+        ImmutableOrigin,
+        String,              // Database
+        String,              // Store
+        Option<KeyPath>, // Key Path
         bool,
     ),
 

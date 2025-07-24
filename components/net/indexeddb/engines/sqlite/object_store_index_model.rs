@@ -12,8 +12,7 @@ pub struct Model {
     pub object_store_id: i32,
     #[sea_orm(unique)]
     pub name: String,
-    #[sea_orm(column_type = "Text")]
-    pub key_path: String,
+    pub key_path: Vec<u8>,
     pub unique_index: bool,
     pub multi_entry_index: bool,
 }

@@ -5,7 +5,7 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
-use net_traits::indexeddb_thread::{AsyncOperation, CreateObjectStoreResult, IndexedDBTxnMode};
+use net_traits::indexeddb_thread::{AsyncOperation, CreateObjectResult, IndexedDBTxnMode, KeyPath};
 use servo_url::ImmutableOrigin;
 use tokio::sync::oneshot;
 
@@ -65,9 +65,9 @@ pub trait KvsEngine {
     fn create_store(
         &self,
         store_name: SanitizedName,
-        key_path: Option<Vec<String>>,
+        key_path: Option<KeyPath>,
         auto_increment: bool,
-    ) -> Result<CreateObjectStoreResult, Self::Error>;
+    ) -> Result<CreateObjectResult, Self::Error>;
 
     fn delete_store(&self, store_name: SanitizedName) -> Result<(), Self::Error>;
 
@@ -82,7 +82,10 @@ pub trait KvsEngine {
     ) -> oneshot::Receiver<Option<Vec<u8>>>;
 
     fn has_key_generator(&self, store_name: SanitizedName) -> bool;
-    fn key_path(&self, store_name: SanitizedName) -> Option<Vec<String>>;
+    fn key_path(&self, store_name: SanitizedName) -> Option<KeyPath>;
+
+    fn create_index(&self, store_name: SanitizedName, index_name: String, key_path: KeyPath, unique: bool, multi_entry: bool) -> Result<CreateObjectResult, Self::Error>;
+    fn delete_index(&self, store_name: SanitizedName, index_name: String) -> Result<(), Self::Error>;
 
     fn version(&self) -> u64;
     fn set_version(&self, version: u64) -> Result<(), Self::Error>;
