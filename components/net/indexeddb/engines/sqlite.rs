@@ -32,6 +32,16 @@ mod serialize {
     }
 }
 
+// These pragmas need to be set once
+const DB_INIT_PRAGMAS: &str = "PRAGMA journal_mode = WAL;";
+
+// These pragmas need to be run once a connection.
+const DB_PRAGMAS: &str = "PRAGMA synchronous = NORMAL;
+PRAGMA journal_size_limit = 67108864 -- 64 megabytes;
+PRAGMA mmap_size = 67108864 -- 64 megabytes;
+PRAGMA cache_size = 2000;
+";
+
 fn range_to_query(range: IndexedDBKeyRange) -> Condition {
     // Special case for optimization
     if let Some(singleton) = range.as_singleton() {
@@ -91,6 +101,10 @@ impl SqliteEngine {
         }
         .unwrap();
 
+        HANDLE
+            .block_on(connection.execute_unprepared(DB_PRAGMAS))
+            .unwrap();
+
         Self {
             connection,
             db_path,
@@ -115,6 +129,7 @@ impl SqliteEngine {
             };
         }
         let connection = Self::get_connection(path).await?;
+        connection.execute_unprepared(DB_INIT_PRAGMAS).await?;
         create_table!(connection, database_model::Entity);
         create_table!(connection, object_data_model::Entity);
         create_table!(connection, object_store_index_model::Entity);
