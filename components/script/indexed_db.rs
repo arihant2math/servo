@@ -112,7 +112,7 @@ pub fn convert_value_to_key(
     // FIXME:(arihant2math) Accept array as well
     if input.is_number() {
         if input.to_number().is_nan() {
-            return Err(Error::Data)
+            return Err(Error::Data);
         }
         return Ok(IndexedDBKeyType::Number(input.to_number()));
     }
