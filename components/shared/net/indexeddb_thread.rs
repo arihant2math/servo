@@ -33,8 +33,7 @@ pub enum IndexedDBKeyType {
     Number(f64),
     String(String),
     Binary(Vec<u8>),
-    // FIXME:(arihant2math) Date should not be stored as a Vec<u8>
-    Date(Vec<u8>),
+    Date(f64),
     Array(Vec<IndexedDBKeyType>),
     // FIXME:(arihant2math) implment ArrayBuffer
 }
@@ -53,7 +52,7 @@ impl PartialOrd for IndexedDBKeyType {
                 IndexedDBKeyType::Date(_) |
                 IndexedDBKeyType::Number(_) |
                 IndexedDBKeyType::String(_),
-            ) => Some(std::cmp::Ordering::Greater),
+            ) => Some(Ordering::Greater),
             // Step 4: If tb is array and ta is binary, string, date or number, return -1.
             (
                 IndexedDBKeyType::Binary(_) |
@@ -61,14 +60,14 @@ impl PartialOrd for IndexedDBKeyType {
                 IndexedDBKeyType::Number(_) |
                 IndexedDBKeyType::String(_),
                 IndexedDBKeyType::Array(_),
-            ) => Some(std::cmp::Ordering::Less),
+            ) => Some(Ordering::Less),
             // Step 5: If ta is binary and tb is string, date or number, return 1.
             (
                 IndexedDBKeyType::Binary(_),
                 IndexedDBKeyType::String(_) |
                 IndexedDBKeyType::Date(_) |
                 IndexedDBKeyType::Number(_),
-            ) => Some(std::cmp::Ordering::Greater),
+            ) => Some(Ordering::Greater),
             // Step 6: If tb is binary and ta is string, date or number, return -1.
             (
                 IndexedDBKeyType::String(_) |
@@ -80,20 +79,16 @@ impl PartialOrd for IndexedDBKeyType {
             (
                 IndexedDBKeyType::String(_),
                 IndexedDBKeyType::Date(_) | IndexedDBKeyType::Number(_),
-            ) => Some(std::cmp::Ordering::Greater),
+            ) => Some(Ordering::Greater),
             // Step 8: If tb is string and ta is date or number, return -1.
             (
                 IndexedDBKeyType::Date(_) | IndexedDBKeyType::Number(_),
                 IndexedDBKeyType::String(_),
-            ) => Some(std::cmp::Ordering::Less),
+            ) => Some(Ordering::Less),
             // Step 9: If ta is date and tb is number, return 1.
-            (IndexedDBKeyType::Date(_), IndexedDBKeyType::Number(_)) => {
-                Some(std::cmp::Ordering::Greater)
-            },
+            (IndexedDBKeyType::Date(_), IndexedDBKeyType::Number(_)) => Some(Ordering::Greater),
             // Step 10: If tb is date and ta is number, return -1.
-            (IndexedDBKeyType::Number(_), IndexedDBKeyType::Date(_)) => {
-                Some(std::cmp::Ordering::Less)
-            },
+            (IndexedDBKeyType::Number(_), IndexedDBKeyType::Date(_)) => Some(Ordering::Less),
             // Step 11 skipped
             // TODO: Likely a tiny bit wrong (use js number comparison)
             (IndexedDBKeyType::Number(a), IndexedDBKeyType::Number(b)) => a.partial_cmp(b),
@@ -101,7 +96,6 @@ impl PartialOrd for IndexedDBKeyType {
             (IndexedDBKeyType::String(a), IndexedDBKeyType::String(b)) => a.partial_cmp(b),
             // TODO: Likely a little wrong (use js binary comparison)
             (IndexedDBKeyType::Binary(a), IndexedDBKeyType::Binary(b)) => a.partial_cmp(b),
-            // TODO: Very wrong (convert to Date and compare)
             (IndexedDBKeyType::Date(a), IndexedDBKeyType::Date(b)) => a.partial_cmp(b),
             // TODO: Probably also wrong (the items in a and b should be compared, double check against the spec)
             (IndexedDBKeyType::Array(a), IndexedDBKeyType::Array(b)) => a.partial_cmp(b),
@@ -222,11 +216,11 @@ pub enum AsyncReadOnlyOperation {
     /// Gets the value associated with the given key in the associated idb data
     GetKey {
         sender: IpcSender<DbResult<Option<IndexedDBKeyType>>>,
-        key: IndexedDBKeyType,
+        key_range: IndexedDBKeyRange,
     },
     GetItem {
         sender: IpcSender<DbResult<Option<Vec<u8>>>>,
-        key: IndexedDBKeyType,
+        key_range: IndexedDBKeyRange,
     },
 
     Count {

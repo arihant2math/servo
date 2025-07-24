@@ -109,9 +109,11 @@ pub fn convert_value_to_key(
     // as it does not implement PartialEq
 
     // Step 3
-    // FIXME:(arihant2math) Accept buffer, array and date as well
+    // FIXME:(arihant2math) Accept array as well
     if input.is_number() {
-        // FIXME:(arihant2math) check for NaN
+        if input.to_number().is_nan() {
+            return Err(Error::Data)
+        }
         return Ok(IndexedDBKeyType::Number(input.to_number()));
     }
 
@@ -131,9 +133,14 @@ pub fn convert_value_to_key(
             }
 
             if let ESClass::Date = built_in_class {
-                // FIXME:(arihant2math) implement it the correct way
-                let key = structuredclone::write(cx, input, None).expect("Could not serialize key");
-                return Ok(IndexedDBKeyType::Date(key.serialized.clone()));
+                let mut f = f64::NAN;
+                if !js::jsapi::DateGetMsecSinceEpoch(*cx, object.handle().into(), &mut f) {
+                    return Err(Error::Data);
+                }
+                if f.is_nan() {
+                    return Err(Error::Data);
+                }
+                return Ok(IndexedDBKeyType::Date(f));
             }
 
             if IsArrayBufferObject(*object) || JS_IsArrayBufferViewObject(*object) {

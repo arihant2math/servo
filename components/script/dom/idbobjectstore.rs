@@ -340,14 +340,16 @@ impl IDBObjectStoreMethods<crate::DomTypeHolder> for IDBObjectStore {
         // Step 4
         let global = self.check_transaction_active()?;
         // Step 5
-        // TODO: Convert to key range instead
-        let serialized_query = convert_value_to_key(cx, query, None);
+        let serialized_query = convert_value_to_key_range(cx, query, None);
         // Step 6
         let (sender, receiver) = indexed_db::create_channel(global);
         serialized_query.and_then(|q| {
             IDBRequest::execute_async(
                 self,
-                AsyncOperation::ReadOnly(AsyncReadOnlyOperation::GetItem { sender, key: q }),
+                AsyncOperation::ReadOnly(AsyncReadOnlyOperation::GetItem {
+                    sender,
+                    key_range: q,
+                }),
                 receiver,
                 None,
                 CanGc::note(),
@@ -363,14 +365,16 @@ impl IDBObjectStoreMethods<crate::DomTypeHolder> for IDBObjectStore {
         // Step 4
         let global = self.check_transaction_active()?;
         // Step 5
-        // TODO: Convert to key range instead
-        let serialized_query = convert_value_to_key(cx, query, None);
+        let serialized_query = convert_value_to_key_range(cx, query, None);
         // Step 6
         let (sender, receiver) = indexed_db::create_channel(global);
         serialized_query.and_then(|q| {
             IDBRequest::execute_async(
                 self,
-                AsyncOperation::ReadOnly(AsyncReadOnlyOperation::GetKey { sender, key: q }),
+                AsyncOperation::ReadOnly(AsyncReadOnlyOperation::GetKey {
+                    sender,
+                    key_range: q,
+                }),
                 receiver,
                 None,
                 CanGc::note(),

@@ -3,13 +3,13 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 use std::path::{Path, PathBuf};
 
-use itertools::Itertools;
 use net_traits::indexeddb_thread::{
     AsyncOperation, AsyncReadOnlyOperation, AsyncReadWriteOperation, CreateObjectResult,
-    IndexedDBKeyType, KeyPath, PutItemResult,
+    IndexedDBKeyRange, KeyPath, PutItemResult,
 };
 use sea_orm::prelude::*;
-use sea_orm::{Database, IntoActiveModel, NotSet, Set};
+use sea_orm::sea_query::IntoCondition;
+use sea_orm::{Condition, Database, IntoActiveModel, NotSet, Set};
 use tokio::sync::oneshot;
 
 use crate::async_runtime::HANDLE;
@@ -19,6 +19,50 @@ mod database_model;
 mod object_data_model;
 mod object_store_index_model;
 mod object_store_model;
+// mod serialize;
+mod serialize {
+    use net_traits::indexeddb_thread::IndexedDBKeyType;
+
+    pub fn encode(key: &IndexedDBKeyType) -> Vec<u8> {
+        bincode::serialize(&key).unwrap()
+    }
+
+    pub fn decode(s: &[u8]) -> Option<IndexedDBKeyType> {
+        bincode::deserialize(s).ok()
+    }
+}
+
+fn range_to_query(range: IndexedDBKeyRange) -> Condition {
+    // Special case for optimization
+    if let Some(singleton) = range.as_singleton() {
+        let encoded = serialize::encode(singleton);
+        return object_data_model::Column::Data.eq(encoded).into_condition();
+    }
+    let mut parts = vec![];
+    if let Some(upper) = range.upper.as_ref() {
+        let upper_bytes = serialize::encode(upper);
+        let query = if range.upper_open {
+            object_data_model::Column::Data.lt(upper_bytes)
+        } else {
+            object_data_model::Column::Data.lte(upper_bytes)
+        };
+        parts.push(query);
+    }
+    if let Some(lower) = range.lower.as_ref() {
+        let lower_bytes = serialize::encode(lower);
+        let query = if range.upper_open {
+            object_data_model::Column::Data.gt(lower_bytes)
+        } else {
+            object_data_model::Column::Data.gte(lower_bytes)
+        };
+        parts.push(query);
+    }
+    let mut condition = Condition::all();
+    for part in parts {
+        condition = condition.add(part);
+    }
+    condition
+}
 
 macro_rules! err {
     ($e:expr) => {
@@ -185,13 +229,7 @@ impl KvsEngine for SqliteEngine {
                         value,
                         should_overwrite,
                     }) => {
-                        let serialized_key: Vec<u8> = match bincode::serialize(&key) {
-                            Ok(key) => key,
-                            Err(e) => {
-                                let _ = sender.send(err!(e));
-                                break;
-                            },
-                        };
+                        let serialized_key: Vec<u8> = serialize::encode(&key);
                         let store = object_data_model::ActiveModel {
                             object_store_id: Set(object_store.id),
                             key: Set(serialized_key.clone()),
@@ -224,15 +262,15 @@ impl KvsEngine for SqliteEngine {
                             let _ = sender.send(Ok(PutItemResult::CannotOverwrite));
                         }
                     },
-                    AsyncOperation::ReadOnly(AsyncReadOnlyOperation::GetItem { sender, key }) => {
-                        let serialized_key: Vec<u8> = bincode::serialize(&key).unwrap();
-                        let result =
-                            object_data_model::Entity::find()
-                                .filter(object_data_model::Column::Key.eq(serialized_key).and(
-                                    object_data_model::Column::ObjectStoreId.eq(object_store.id),
-                                ))
-                                .one(&conn)
-                                .await;
+                    AsyncOperation::ReadOnly(AsyncReadOnlyOperation::GetItem {
+                        sender,
+                        key_range,
+                    }) => {
+                        let result = object_data_model::Entity::find()
+                            .filter(object_data_model::Column::ObjectStoreId.eq(object_store.id))
+                            .filter(range_to_query(key_range))
+                            .one(&conn)
+                            .await;
 
                         match result {
                             Ok(result) => {
@@ -247,7 +285,7 @@ impl KvsEngine for SqliteEngine {
                         sender,
                         key,
                     }) => {
-                        let serialized_key: Vec<u8> = bincode::serialize(&key).unwrap();
+                        let serialized_key: Vec<u8> = serialize::encode(&key);
                         // More ergonomic way to delete an item than querying first.
                         let result =
                             object_data_model::Entity::delete_many()
@@ -266,40 +304,15 @@ impl KvsEngine for SqliteEngine {
                         sender,
                         key_range,
                     }) => {
-                        if let Some(key) = key_range.as_singleton() {
-                            let serialized_key: Vec<u8> = bincode::serialize(&key).unwrap();
-                            let result = object_data_model::Entity::find()
-                                .filter(object_data_model::Column::Key.eq(serialized_key).and(
-                                    object_data_model::Column::ObjectStoreId.eq(object_store.id),
-                                ))
-                                .one(&conn)
-                                .await;
-                            match result {
-                                Ok(result) => {
-                                    let _ = sender.send(Ok(result.map(|_| 1).unwrap_or(0)));
-                                },
-                                Err(e) => {
-                                    let _ = sender.send(err!(e));
-                                },
-                            }
-                        }
                         let res = object_data_model::Entity::find()
                             .filter(object_data_model::Column::ObjectStoreId.eq(object_store.id))
+                            .filter(range_to_query(key_range))
                             .all(&conn)
                             .await;
                         match res {
                             Ok(list) => {
-                                let count = list
-                                    .iter()
-                                    .filter(|s| {
-                                        let key: IndexedDBKeyType =
-                                            bincode::deserialize(&s.key).unwrap();
-                                        key_range.contains(&key)
-                                    })
-                                    .try_len()
-                                    .unwrap_or(0);
                                 // TODO: make that return usize instead of u64
-                                let _ = sender.send(Ok(count as u64));
+                                let _ = sender.send(Ok(list.len() as u64));
                             },
                             Err(e) => {
                                 let _ = sender.send(err!(e));
@@ -316,22 +329,22 @@ impl KvsEngine for SqliteEngine {
                             Err(e) => sender.send(err!(e)),
                         };
                     },
-                    AsyncOperation::ReadOnly(AsyncReadOnlyOperation::GetKey { sender, key }) => {
-                        let serialized_key: Vec<u8> = bincode::serialize(&key).unwrap();
-                        let result =
-                            object_data_model::Entity::find()
-                                .filter(object_data_model::Column::Key.eq(serialized_key).and(
-                                    object_data_model::Column::ObjectStoreId.eq(object_store.id),
-                                ))
-                                .one(&conn)
-                                .await;
+                    AsyncOperation::ReadOnly(AsyncReadOnlyOperation::GetKey {
+                        sender,
+                        key_range,
+                    }) => {
+                        let result = object_data_model::Entity::find()
+                            .filter(object_data_model::Column::ObjectStoreId.eq(object_store.id))
+                            .filter(range_to_query(key_range))
+                            .one(&conn)
+                            .await;
 
                         match result {
                             Ok(result) => {
                                 let _ =
                                     sender
                                         .send(Ok(result
-                                            .map(|blob| bincode::deserialize(&blob.key).unwrap())));
+                                            .map(|blob| serialize::decode(&blob.key).unwrap())));
                             },
                             Err(e) => {
                                 let _ = sender.send(err!(e));
