@@ -33,7 +33,8 @@ mod serialize {
 }
 
 // These pragmas need to be set once
-const DB_INIT_PRAGMAS: &str = "PRAGMA journal_mode = WAL;";
+const DB_INIT_PRAGMAS: &str = "PRAGMA journal_mode = WAL;
+PRAGMA encoding = 'UTF-16';";
 
 // These pragmas need to be run once a connection.
 const DB_PRAGMAS: &str = "PRAGMA synchronous = NORMAL;
