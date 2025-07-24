@@ -4,10 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use itertools::Itertools;
-use net_traits::indexeddb_thread::{
-    AsyncOperation, AsyncReadOnlyOperation, AsyncReadWriteOperation, CreateObjectStoreResult,
-    IndexedDBKeyType, PutItemResult,
-};
+use net_traits::indexeddb_thread::{AsyncOperation, AsyncReadOnlyOperation, AsyncReadWriteOperation, CreateObjectResult, IndexedDBKeyType, KeyPath, PutItemResult};
 use sea_orm::prelude::*;
 use sea_orm::{Database, IntoActiveModel, NotSet, Set};
 use tokio::sync::oneshot;
@@ -91,9 +88,9 @@ impl KvsEngine for SqliteEngine {
     fn create_store(
         &self,
         store_name: SanitizedName,
-        key_path: Option<Vec<String>>,
+        key_path: Option<KeyPath>,
         auto_increment: bool,
-    ) -> Result<CreateObjectStoreResult, Self::Error> {
+    ) -> Result<CreateObjectResult, Self::Error> {
         HANDLE.block_on(async {
             if object_store_model::Entity::find()
                 .filter(object_store_model::Column::Name.eq(store_name.to_string()))
@@ -101,17 +98,17 @@ impl KvsEngine for SqliteEngine {
                 .await?
                 .is_some()
             {
-                return Ok(CreateObjectStoreResult::AlreadyExists);
+                return Ok(CreateObjectResult::AlreadyExists);
             }
             let model = object_store_model::ActiveModel {
                 id: NotSet,
                 name: Set(store_name.to_string()),
-                key_path: Set(key_path.map(|v| v.iter().join(","))),
+                key_path: Set(key_path.map(|v| bincode::serialize(&v).unwrap())),
                 auto_increment: Set(auto_increment),
             };
             model.insert(&self.connection).await?;
 
-            Ok(CreateObjectStoreResult::Created)
+            Ok(CreateObjectResult::Created)
         })
     }
 
@@ -338,7 +335,7 @@ impl KvsEngine for SqliteEngine {
         })
     }
 
-    fn key_path(&self, store_name: SanitizedName) -> Option<Vec<String>> {
+    fn key_path(&self, store_name: SanitizedName) -> Option<KeyPath> {
         HANDLE.block_on(async {
             if let Some(model) = object_store_model::Entity::find()
                 .filter(object_store_model::Column::Name.eq(store_name.to_string()))
@@ -347,13 +344,62 @@ impl KvsEngine for SqliteEngine {
                 .unwrap()
             {
                 model.key_path.map(|key_path| {
-                    key_path.split(",")
-                        .map(|s| s.to_string())
-                        .collect::<Vec<String>>()
+                    bincode::deserialize(&key_path).unwrap()
                 })
             } else {
                 None
             }
+        })
+    }
+
+    fn create_index(&self, store_name: SanitizedName, index_name: String, key_path: KeyPath, unique: bool, multi_entry: bool) -> Result<CreateObjectResult, Self::Error> {
+        HANDLE.block_on(async {
+            let object_store = match object_store_model::Entity::find()
+                .filter(object_store_model::Column::Name.eq(store_name.to_string()))
+                .one(&self.connection)
+                .await? {
+                Some(model) => model,
+                None => {
+                    return Err(Self::Error::Custom("No such store".to_string()));
+                }
+            };
+            if object_store_index_model::Entity::find()
+                .filter(object_store_index_model::Column::Name.eq(index_name.to_string())
+                    .and(object_store_index_model::Column::ObjectStoreId.eq(object_store.id)))
+                .one(&self.connection).await?.is_some() {
+                return Ok(CreateObjectResult::AlreadyExists)
+            }
+            let model = object_store_index_model::ActiveModel {
+                id: Default::default(),
+                object_store_id: Set(object_store.id),
+                name: Set(index_name),
+                key_path: Set(bincode::serialize(&key_path).unwrap()),
+                unique_index: Set(unique),
+                multi_entry_index: Set(multi_entry),
+            };
+            model.insert(&self.connection).await?;
+            Ok(CreateObjectResult::Created)
+        })
+    }
+
+    fn delete_index(&self, store_name: SanitizedName, index_name: String) -> Result<(), Self::Error> {
+        HANDLE.block_on(async {
+            let object_store = match object_store_model::Entity::find()
+                .filter(object_store_model::Column::Name.eq(store_name.to_string()))
+                .one(&self.connection)
+                .await? {
+                Some(model) => model,
+                None => {
+                    return Err(Self::Error::Custom("No such store".to_string()));
+                }
+            };
+            if let Some(model) = object_store_index_model::Entity::find()
+                .filter(object_store_index_model::Column::Name.eq(index_name.to_string())
+                    .and(object_store_index_model::Column::ObjectStoreId.eq(object_store.id)))
+                .one(&self.connection).await? {
+                model.delete(&self.connection).await?;
+            }
+            Ok(())
         })
     }
 

@@ -9,10 +9,7 @@ use std::thread;
 
 use ipc_channel::ipc::{self, IpcError, IpcReceiver, IpcSender};
 use log::{debug, warn};
-use net_traits::indexeddb_thread::{
-    AsyncOperation, CreateObjectStoreResult, DbResult, IndexedDBThreadMsg, IndexedDBTxnMode,
-    SyncOperation,
-};
+use net_traits::indexeddb_thread::{AsyncOperation, CreateObjectResult, DbResult, IndexedDBThreadMsg, IndexedDBTxnMode, KeyPath, SyncOperation};
 use servo_config::pref;
 use servo_url::origin::ImmutableOrigin;
 
@@ -108,15 +105,25 @@ impl<E: KvsEngine> IndexedDBEnvironment<E> {
         self.engine.has_key_generator(store_name)
     }
 
-    fn key_path(&self, store_name: SanitizedName) -> Option<Vec<String>> {
+    fn key_path(&self, store_name: SanitizedName) -> Option<KeyPath> {
         self.engine.key_path(store_name)
+    }
+
+    fn create_index(&self, sender: IpcSender<DbResult<CreateObjectResult>>, store_name: SanitizedName, index_name: String, key_path: KeyPath, unique: bool, multi_entry: bool) {
+        let result = self.engine.create_index(store_name, index_name, key_path, unique, multi_entry);
+        let _ = sender.send(result.map_err(|e| format!("{:?}", e)));
+    }
+
+    fn delete_index(&self, sender: IpcSender<DbResult<()>>, store_name: SanitizedName, index_name: String) {
+        let result = self.engine.delete_index(store_name, index_name);
+        let _ = sender.send(result.map_err(|e| format!("{:?}", e)));
     }
 
     fn create_object_store(
         &mut self,
-        sender: IpcSender<DbResult<CreateObjectStoreResult>>,
+        sender: IpcSender<DbResult<CreateObjectResult>>,
         store_name: SanitizedName,
-        key_path: Option<Vec<String>>,
+        key_path: Option<KeyPath>,
         auto_increment: bool,
     ) {
         let result = self
@@ -287,6 +294,18 @@ impl IndexedDBManager {
                     .get_database(origin, db_name)
                     .map(|db| db.key_path(store_name));
                 let _ = sender.send(result);
+            }
+            SyncOperation::CreateIndex(sender, origin, db_name, store_name, index_name, key_path, unique, multi_entry) => {
+                let store_name = SanitizedName::new(store_name);
+                self
+                    .get_database(origin, db_name)
+                    .map(|db| db.create_index(sender, store_name, index_name, key_path, unique, multi_entry));
+            }
+            SyncOperation::DeleteIndex(sender, origin, db_name, store_name, index_name) => {
+                let store_name = SanitizedName::new(store_name);
+                self.
+                    get_database(origin, db_name)
+                    .map(|db| db.delete_index(sender, store_name, index_name));
             }
             SyncOperation::Commit(sender, _origin, _db_name, _txn) => {
                 // FIXME:(arihant2math) This does nothing at the moment

@@ -11,8 +11,8 @@ pub struct Model {
     pub id: i32,
     #[sea_orm(unique)]
     pub name: String,
-    #[sea_orm(column_type = "Text", nullable)]
-    pub key_path: Option<String>,
+    #[sea_orm(nullable)]
+    pub key_path: Option<Vec<u8>>,
     #[sea_orm(default_value = false)]
     pub auto_increment: bool,
 }
