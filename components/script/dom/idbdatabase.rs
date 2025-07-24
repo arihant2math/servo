@@ -7,7 +7,7 @@ use std::cell::Cell;
 use dom_struct::dom_struct;
 use ipc_channel::ipc::IpcSender;
 use net_traits::IpcSend;
-use net_traits::indexeddb_thread::{IndexedDBThreadMsg, SyncOperation};
+use net_traits::indexeddb_thread::{IndexedDBThreadMsg, KeyPath, SyncOperation};
 use profile_traits::ipc;
 use stylo_atoms::Atom;
 
@@ -251,10 +251,10 @@ impl IDBDatabaseMethods<crate::DomTypeHolder> for IDBDatabase {
 
         let key_paths = key_path.map(|p| match p {
             StringOrStringSequence::String(s) => {
-                vec![s.to_string()]
+                KeyPath::String(s.to_string())
             },
             StringOrStringSequence::StringSequence(s) => {
-                s.clone().into_iter().map(|s| s.to_string()).collect()
+                KeyPath::Sequence(s.clone().into_iter().map(|s| s.to_string()).collect())
             },
         });
         let operation = SyncOperation::CreateObjectStore(

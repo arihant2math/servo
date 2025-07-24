@@ -38,7 +38,7 @@ impl SqliteEngine {
         let connection = if db_path.exists() {
             HANDLE.block_on(async { Self::get_connection(&db_path).await })
         } else {
-            std::fs::create_dir_all(&db_path.parent().unwrap()).unwrap();
+            std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
             std::fs::File::create(&db_path).unwrap();
             HANDLE.block_on(async { Self::init_db(&db_path, db_info, version).await })
         }
@@ -144,7 +144,7 @@ impl KvsEngine for SqliteEngine {
         HANDLE.block_on(async {
             self.connection.close().await?;
             if self.db_path.exists() {
-                std::fs::remove_dir_all(&self.db_path.parent().unwrap()).unwrap();
+                std::fs::remove_dir_all(self.db_path.parent().unwrap()).unwrap();
             }
             Ok(())
         })
@@ -313,6 +313,25 @@ impl KvsEngine for SqliteEngine {
                             Err(e) => sender.send(err!(e)),
                         };
                     },
+                    AsyncOperation::ReadOnly(AsyncReadOnlyOperation::GetKey { sender, key }) => {
+                        let serialized_key: Vec<u8> = bincode::serialize(&key).unwrap();
+                        let result =
+                            object_data_model::Entity::find()
+                                .filter(object_data_model::Column::Key.eq(serialized_key).and(
+                                    object_data_model::Column::ObjectStoreId.eq(object_store.id),
+                                ))
+                                .one(&conn)
+                                .await;
+
+                        match result {
+                            Ok(result) => {
+                                let _ = sender.send(Ok(result.map(|blob| bincode::deserialize(&blob.key).unwrap())));
+                            },
+                            Err(e) => {
+                                let _ = sender.send(err!(e));
+                            },
+                        }
+                    }
                 }
             }
         });
