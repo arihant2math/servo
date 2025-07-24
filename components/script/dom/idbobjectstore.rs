@@ -235,19 +235,18 @@ impl IDBObjectStore {
             serialized_key = convert_value_to_key(cx, key, None)?;
         } else {
             // Step 11: We should use in-line keys instead
-            if let Some(Ok(kpk)) = self.key_path.as_ref().map(|p| extract_key(
-                cx,
-                value,
-                p,
-                None,
-            )) {
+            if let Some(Ok(kpk)) = self
+                .key_path
+                .as_ref()
+                .map(|p| extract_key(cx, value, p, None))
+            {
                 serialized_key = kpk;
             } else {
                 if !self.has_key_generator() {
                     return Err(Error::Data);
                 }
                 // FIXME:(arihant2math)
-                return Err(Error::NotSupported)
+                return Err(Error::NotSupported);
             }
         }
 

@@ -78,7 +78,10 @@ impl From<()> for IdbResult {
     }
 }
 
-impl<T> From<Option<T>> for IdbResult where T: Into<IdbResult> {
+impl<T> From<Option<T>> for IdbResult
+where
+    T: Into<IdbResult>,
+{
     fn from(value: Option<T>) -> Self {
         match value {
             Some(value) => value.into(),
