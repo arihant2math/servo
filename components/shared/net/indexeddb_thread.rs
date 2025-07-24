@@ -16,7 +16,7 @@ pub type DbResult<T> = Result<T, DbError>;
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum KeyPath {
     String(String),
-    Sequence(Vec<String>)
+    Sequence(Vec<String>),
 }
 
 // https://www.w3.org/TR/IndexedDB-2/#enumdef-idbtransactionmode
@@ -305,28 +305,28 @@ pub enum SyncOperation {
     CreateIndex(
         IpcSender<DbResult<CreateObjectResult>>,
         ImmutableOrigin,
-        String,              // Database
-        String,              // Store
-        String,              // Index name
-        KeyPath,              // key path
-        bool,                // unique flag
-        bool,                // multientry flag
+        String,  // Database
+        String,  // Store
+        String,  // Index name
+        KeyPath, // key path
+        bool,    // unique flag
+        bool,    // multientry flag
     ),
     /// Delete an index
     DeleteIndex(
         IpcSender<DbResult<()>>,
         ImmutableOrigin,
-        String,              // Database
-        String,              // Store
-        String,              // Index name
+        String, // Database
+        String, // Store
+        String, // Index name
     ),
 
     /// Creates a new store for the database
     CreateObjectStore(
         IpcSender<DbResult<CreateObjectResult>>,
         ImmutableOrigin,
-        String,              // Database
-        String,              // Store
+        String,          // Database
+        String,          // Store
         Option<KeyPath>, // Key Path
         bool,
     ),
