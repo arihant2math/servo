@@ -220,6 +220,10 @@ pub enum PutItemResult {
 #[derive(Debug, Deserialize, Serialize)]
 pub enum AsyncReadOnlyOperation {
     /// Gets the value associated with the given key in the associated idb data
+    GetKey {
+        sender: IpcSender<DbResult<Option<IndexedDBKeyType>>>,
+        key: IndexedDBKeyType,
+    },
     GetItem {
         sender: IpcSender<DbResult<Option<Vec<u8>>>>,
         key: IndexedDBKeyType,

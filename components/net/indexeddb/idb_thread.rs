@@ -297,15 +297,17 @@ impl IndexedDBManager {
             }
             SyncOperation::CreateIndex(sender, origin, db_name, store_name, index_name, key_path, unique, multi_entry) => {
                 let store_name = SanitizedName::new(store_name);
-                self
-                    .get_database(origin, db_name)
-                    .map(|db| db.create_index(sender, store_name, index_name, key_path, unique, multi_entry));
+                if let Some(db) = self
+                    .get_database(origin, db_name) {
+                    db.create_index(sender, store_name, index_name, key_path, unique, multi_entry);
+                }
             }
             SyncOperation::DeleteIndex(sender, origin, db_name, store_name, index_name) => {
                 let store_name = SanitizedName::new(store_name);
-                self.
-                    get_database(origin, db_name)
-                    .map(|db| db.delete_index(sender, store_name, index_name));
+                if let Some(db) = self.
+                    get_database(origin, db_name) {
+                    db.delete_index(sender, store_name, index_name)
+                }
             }
             SyncOperation::Commit(sender, _origin, _db_name, _txn) => {
                 // FIXME:(arihant2math) This does nothing at the moment

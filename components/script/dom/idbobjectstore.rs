@@ -357,17 +357,27 @@ impl IDBObjectStoreMethods<crate::DomTypeHolder> for IDBObjectStore {
     }
 
     // https://www.w3.org/TR/IndexedDB-2/#dom-idbobjectstore-getkey
-    // fn GetKey(&self, _cx: SafeJSContext, _query: HandleValue) -> DomRoot<IDBRequest> {
-    //     // Step 1: Unneeded, handled by self.check_transaction_active()
-    //     // TODO: Step 2
-    //     // TODO: Step 3
-    //     // Step 4
-    //     self.check_transaction_active()?;
-    //     // Step 5
-    //     // TODO: Convert to key range instead
-    //     let serialized_query = IDBObjectStore::convert_value_to_key(cx, query, None);
-    //     unimplemented!();
-    // }
+    fn GetKey(&self, cx: SafeJSContext, query: HandleValue) -> Result<DomRoot<IDBRequest>, Error> {
+        // Step 1: Unneeded, handled by self.check_transaction_active()
+        // TODO: Step 2
+        // TODO: Step 3
+        // Step 4
+        let global = self.check_transaction_active()?;
+        // Step 5
+        // TODO: Convert to key range instead
+        let serialized_query = convert_value_to_key(cx, query, None);
+        // Step 6
+        let (sender, receiver) = indexed_db::create_channel(global);
+        serialized_query.and_then(|q| {
+            IDBRequest::execute_async(
+                self,
+                AsyncOperation::ReadOnly(AsyncReadOnlyOperation::GetKey { sender, key: q }),
+                receiver,
+                None,
+                CanGc::note(),
+            )
+        })
+    }
 
     // https://www.w3.org/TR/IndexedDB-2/#dom-idbobjectstore-getall
     // fn GetAll(

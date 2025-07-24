@@ -78,10 +78,10 @@ impl From<()> for IdbResult {
     }
 }
 
-impl From<Option<Vec<u8>>> for IdbResult {
-    fn from(value: Option<Vec<u8>>) -> Self {
+impl<T> From<Option<T>> for IdbResult where T: Into<IdbResult> {
+    fn from(value: Option<T>) -> Self {
         match value {
-            Some(value) => IdbResult::Data(value),
+            Some(value) => value.into(),
             None => IdbResult::None,
         }
     }
