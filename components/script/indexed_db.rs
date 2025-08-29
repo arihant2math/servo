@@ -71,8 +71,50 @@ pub fn key_type_to_jsval(
 
 // https://www.w3.org/TR/IndexedDB-2/#valid-key-path
 pub fn is_valid_key_path(key_path: &StrOrStringSequence) -> bool {
-    fn is_identifier(_s: &str) -> bool {
-        // FIXME: (arihant2math)
+    fn is_identifier(s: &str) -> bool {
+        let mut chars = s.chars();
+        if let Some(first_char) = chars.next() {
+            if !is_identifier_start(first_char) {
+                return false;
+            }
+        } else {
+            return false; // Empty string is not a valid identifier
+        }
+
+        chars.all(is_identifier_part)
+    }
+
+    fn is_identifier_start(c: char) -> bool {
+        c == '$' || c == '_' || c.is_ascii_alphabetic() || unicode_id_start(c)
+    }
+
+    fn is_identifier_part(c: char) -> bool {
+        c == '$' || c.is_ascii_alphanumeric() || unicode_id_continue(c)
+    }
+
+    // https://unicode.org/reports/tr31/#Default_Identifier_Syntax
+
+    fn unicode_id_start(c: char) -> bool {
+        // ID_Start characters are derived from the Unicode General_Category of
+        // uppercase letters, lowercase letters, titlecase letters, modifier letters,
+        // other letters, letter numbers, plus Other_ID_Start,
+        // minus Pattern_Syntax and Pattern_White_Space code points.
+        // FIXME:(arihant2math) Implement the full check
+        if c.is_whitespace() {
+            return false;
+        }
+        true
+    }
+
+    fn unicode_id_continue(c: char) -> bool {
+        // ID_Continue characters include
+        // ID_Start characters, plus characters having the Unicode General_Category of nonspacing marks,
+        // spacing combining marks, decimal number, connector punctuation, plus Other_ID_Continue,
+        // minus Pattern_Syntax and Pattern_White_Space code points.
+        // FIXME:(arihant2math) Implement the full check
+        if c.is_whitespace() {
+            return false;
+        }
         true
     }
 
