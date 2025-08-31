@@ -50,26 +50,30 @@ impl CryptoMethods<crate::DomTypeHolder> for Crypto {
     }
 
     #[allow(unsafe_code)]
-    // https://w3c.github.io/webcrypto/#Crypto-method-getRandomValues
+    // https://www.w3.org/TR/webcrypto-2/#Crypto-method-getRandomValues
     fn GetRandomValues(
         &self,
         _cx: JSContext,
         mut input: CustomAutoRooterGuard<ArrayBufferView>,
     ) -> Fallible<ArrayBufferView> {
+        // Step 1.
         let array_type = input.get_array_type();
 
         if !is_integer_buffer(array_type) {
             Err(Error::TypeMismatch)
         } else {
+            // Step 2. & 3.
             let data = unsafe { input.as_mut_slice() };
             if data.len() > 65536 {
                 return Err(Error::QuotaExceeded {
-                    quota: None,
-                    requested: None,
+                    quota: Some(65536.into()),
+                    requested: Some(data.len().into()),
                 });
             }
+            // Step 4. & 5.
             self.rng.borrow_mut().fill_bytes(data);
             let underlying_object = unsafe { input.underlying_object() };
+            // Step 6. & 7.
             TypedArray::<ArrayBufferViewU8, *mut JSObject>::from(*underlying_object)
                 .map_err(|_| Error::JSFailed)
         }
