@@ -1,21 +1,21 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use ipc_channel::ipc::IpcSender;
 use log::{error, info};
 use net_traits::indexeddb_thread::{
     AsyncOperation, AsyncReadOnlyOperation, AsyncReadWriteOperation, BackendError, BackendResult,
-    CreateObjectResult, IndexedDBKeyRange, IndexedDBKeyType, IndexedDBRecord, IndexedDBTxnMode,
-    KeyPath, PutItemResult,
+    CreateObjectResult, IndexedDBKeyRange, IndexedDBKeyType, IndexedDBRecord,
+    IndexedDBTransactionState, IndexedDBTxnMode, KeyPath, KvsOperation, PutItemResult,
 };
-use rusqlite::{Connection, Error, OptionalExtension, params};
+use rusqlite::{Connection, DropBehavior, Error, OptionalExtension, TransactionBehavior, params};
 use sea_query::{Condition, Expr, ExprTrait, IntoCondition, SqliteQueryBuilder};
 use sea_query_rusqlite::RusqliteBinder;
 use serde::Serialize;
-use tokio::sync::oneshot;
 
 use crate::indexeddb::engines::{KvsEngine, KvsTransaction};
 use crate::indexeddb::idb_thread::IndexedDBDescription;
@@ -75,6 +75,7 @@ fn range_to_query(range: IndexedDBKeyRange) -> Condition {
 pub struct SqliteEngine {
     db_path: PathBuf,
     connection: Connection,
+    locked_stores: Arc<RwLock<HashMap<String, IndexedDBTxnMode>>>,
     read_pool: Arc<CoreResourceThreadPool>,
     write_pool: Arc<CoreResourceThreadPool>,
 }
@@ -108,6 +109,7 @@ impl SqliteEngine {
             db_path,
             read_pool: pool.clone(),
             write_pool: pool,
+            locked_stores: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -362,6 +364,10 @@ impl KvsEngine for SqliteEngine {
         Ok(())
     }
 
+    fn locked_store_names(&self) -> HashMap<String, IndexedDBTxnMode> {
+        self.locked_stores.read().unwrap().clone()
+    }
+
     fn delete_database(self) -> Result<(), Self::Error> {
         // attempt to close the connection first
         let _ = self.connection.close();
@@ -373,22 +379,55 @@ impl KvsEngine for SqliteEngine {
         Ok(())
     }
 
-    fn process_transaction(
-        &self,
-        transaction: KvsTransaction,
-    ) -> oneshot::Receiver<Option<Vec<u8>>> {
-        let (tx, rx) = oneshot::channel();
-
+    fn process_transaction(&self, transaction: KvsTransaction) {
         let spawning_pool = if transaction.mode == IndexedDBTxnMode::Readonly {
             self.read_pool.clone()
         } else {
             self.write_pool.clone()
         };
         let path = self.db_path.clone();
+        let locked_stores = self.locked_stores.clone();
         spawning_pool.spawn(move || {
-            let connection = Connection::open(path).unwrap();
-            for request in transaction.requests {
-                let object_store = connection
+            transaction
+                .state_change_sender
+                .send(IndexedDBTransactionState::Started)
+                .ok();
+            if !matches!(transaction.mode, IndexedDBTxnMode::Readonly) {
+                let mut mut_locked = locked_stores.write().unwrap();
+                for item in &transaction.stores {
+                    mut_locked.insert(item.clone(), transaction.mode);
+                }
+                // Rust usually drops at the end of the scope, but we want to let others use this mutex
+                drop(mut_locked);
+            }
+            let mut connection = Connection::open(path).unwrap();
+            connection.set_transaction_behavior(TransactionBehavior::Deferred);
+            let mut db_transaction = connection.transaction().unwrap();
+            db_transaction.set_drop_behavior(DropBehavior::Rollback);
+
+            loop {
+                let request = match transaction
+                    .operations
+                    .recv()
+                {
+                    Ok(req) => req,
+                    Err(e) => {
+                        error!("Failed to receive transaction request: {:?}", e);
+                        break;
+                    },
+                };
+                let request = match request {
+                    KvsOperation::Store(store) => store,
+                    KvsOperation::Wait(sender) => {
+                        let _ = sender.send(Ok(()));
+                        continue;
+                    },
+                    KvsOperation::Commit(sender) => {
+                        let _ = sender.send(Ok(()));
+                        break;
+                    }
+                };
+                let object_store = db_transaction
                     .prepare("SELECT * FROM object_store WHERE name = ?")
                     .and_then(|mut stmt| {
                         stmt.query_row(params![request.store_name.to_string()], |row| {
@@ -428,7 +467,7 @@ impl KvsEngine for SqliteEngine {
                         };
                         let key = match key
                             .map(Ok)
-                            .unwrap_or_else(|| Self::generate_key(&connection, &object_store))
+                            .unwrap_or_else(|| Self::generate_key(&db_transaction, &object_store))
                         {
                             Ok(key) => key,
                             Err(e) => {
@@ -439,7 +478,7 @@ impl KvsEngine for SqliteEngine {
                         let serialized_key: Vec<u8> = bincode::serialize(&key).unwrap();
                         let _ = sender.send(
                             Self::put_item(
-                                &connection,
+                                &db_transaction,
                                 object_store,
                                 serialized_key,
                                 value,
@@ -456,7 +495,7 @@ impl KvsEngine for SqliteEngine {
                             continue;
                         };
                         let _ = sender.send(
-                            Self::get_item(&connection, object_store, key_range)
+                            Self::get_item(&db_transaction, object_store, key_range)
                                 .map_err(|e| BackendError::DbErr(format!("{:?}", e))),
                         );
                     },
@@ -469,7 +508,7 @@ impl KvsEngine for SqliteEngine {
                             continue;
                         };
                         let _ = sender.send(
-                            Self::get_all_keys(&connection, object_store, key_range, count)
+                            Self::get_all_keys(&db_transaction, object_store, key_range, count)
                                 .map(|keys| {
                                     keys.into_iter()
                                         .map(|k| bincode::deserialize(&k).unwrap())
@@ -487,7 +526,7 @@ impl KvsEngine for SqliteEngine {
                             continue;
                         };
                         let _ = sender.send(
-                            Self::get_all_items(&connection, object_store, key_range, count)
+                            Self::get_all_items(&db_transaction, object_store, key_range, count)
                                 .map_err(|e| BackendError::DbErr(format!("{:?}", e))),
                         );
                     },
@@ -500,7 +539,7 @@ impl KvsEngine for SqliteEngine {
                         };
                         let serialized_key: Vec<u8> = bincode::serialize(&key).unwrap();
                         let _ = sender.send(
-                            Self::delete_item(&connection, object_store, serialized_key)
+                            Self::delete_item(&db_transaction, object_store, serialized_key)
                                 .map_err(|e| BackendError::DbErr(format!("{:?}", e))),
                         );
                     },
@@ -512,7 +551,7 @@ impl KvsEngine for SqliteEngine {
                             continue;
                         };
                         let _ = sender.send(
-                            Self::count(&connection, object_store, key_range)
+                            Self::count(&db_transaction, object_store, key_range)
                                 .map(|r| r as u64)
                                 .map_err(|e| BackendError::DbErr(format!("{:?}", e))),
                         );
@@ -525,7 +564,7 @@ impl KvsEngine for SqliteEngine {
                             continue;
                         };
                         let _ = sender.send(
-                            Self::get_all_records(&connection, object_store, key_range)
+                            Self::get_all_records(&db_transaction, object_store, key_range)
                                 .map(|records| {
                                     records
                                         .into_iter()
@@ -544,7 +583,7 @@ impl KvsEngine for SqliteEngine {
                             continue;
                         };
                         let _ = sender.send(
-                            Self::clear(&connection, object_store)
+                            Self::clear(&db_transaction, object_store)
                                 .map_err(|e| BackendError::DbErr(format!("{:?}", e))),
                         );
                     },
@@ -556,16 +595,45 @@ impl KvsEngine for SqliteEngine {
                             continue;
                         };
                         let _ = sender.send(
-                            Self::get_key(&connection, object_store, key_range)
+                            Self::get_key(&db_transaction, object_store, key_range)
                                 .map(|key| key.map(|k| bincode::deserialize(&k).unwrap()))
                                 .map_err(|e| BackendError::DbErr(format!("{:?}", e))),
                         );
                     },
                 }
             }
-            let _ = tx.send(None);
+
+            transaction
+                .state_change_sender
+                .send(IndexedDBTransactionState::Committing)
+                .unwrap();
+            db_transaction.commit().unwrap_or_else(|e| {
+                error!("Failed to commit transaction, rolling back: {e}");
+                transaction
+                    .state_change_sender
+                    .send(IndexedDBTransactionState::Aborted)
+                    .unwrap();
+            });
+            if !matches!(transaction.mode, IndexedDBTxnMode::Readonly) {
+                let mut mut_locked = locked_stores.write().unwrap();
+                for item in transaction.stores {
+                    // Never panic inside a mutex lock, this will poison the mutex
+                    // and all other threads will panic when they try to access it
+                    if mut_locked.remove(&item).is_none() {
+                        error!(
+                            "Store {} was not locked while transaction was operating",
+                            item
+                        );
+                    }
+                }
+                drop(mut_locked);
+            }
+            // We finish no matter what
+            transaction
+                .state_change_sender
+                .send(IndexedDBTransactionState::Finished)
+                .ok();
         });
-        rx
     }
 
     // TODO: we should be able to error out here, maybe change the trait definition?

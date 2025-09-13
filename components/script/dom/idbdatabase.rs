@@ -7,7 +7,7 @@ use std::cell::Cell;
 use dom_struct::dom_struct;
 use ipc_channel::ipc::IpcSender;
 use net_traits::IpcSend;
-use net_traits::indexeddb_thread::{IndexedDBThreadMsg, KeyPath, SyncOperation};
+use net_traits::indexeddb_thread::{IndexedDBThreadMsg, KeyPath};
 use profile_traits::ipc;
 use stylo_atoms::Atom;
 
@@ -101,15 +101,13 @@ impl IDBDatabase {
 
     pub fn version(&self) -> u64 {
         let (sender, receiver) = ipc::channel(self.global().time_profiler_chan().clone()).unwrap();
-        let operation = SyncOperation::Version(
+        let operation = IndexedDBThreadMsg::Version(
             sender,
             self.global().origin().immutable().clone(),
             self.name.to_string(),
         );
 
-        let _ = self
-            .get_idb_thread()
-            .send(IndexedDBThreadMsg::Sync(operation));
+        let _ = self.get_idb_thread().send(operation);
 
         receiver.recv().unwrap().unwrap_or_else(|e| {
             error!("{e:?}");
@@ -262,7 +260,7 @@ impl IDBDatabaseMethods<crate::DomTypeHolder> for IDBDatabase {
                 KeyPath::Sequence(s.iter().map(|s| s.to_string()).collect())
             },
         });
-        let operation = SyncOperation::CreateObjectStore(
+        let operation = IndexedDBThreadMsg::CreateObjectStore(
             sender,
             self.global().origin().immutable().clone(),
             self.name.to_string(),
@@ -271,9 +269,7 @@ impl IDBDatabaseMethods<crate::DomTypeHolder> for IDBDatabase {
             auto_increment,
         );
 
-        self.get_idb_thread()
-            .send(IndexedDBThreadMsg::Sync(operation))
-            .unwrap();
+        self.get_idb_thread().send(operation).unwrap();
 
         if receiver
             .recv()
@@ -323,16 +319,14 @@ impl IDBDatabaseMethods<crate::DomTypeHolder> for IDBDatabase {
         // Step 7
         let (sender, receiver) = ipc::channel(self.global().time_profiler_chan().clone()).unwrap();
 
-        let operation = SyncOperation::DeleteObjectStore(
+        let operation = IndexedDBThreadMsg::DeleteObjectStore(
             sender,
             self.global().origin().immutable().clone(),
             self.name.to_string(),
             name.to_string(),
         );
 
-        self.get_idb_thread()
-            .send(IndexedDBThreadMsg::Sync(operation))
-            .unwrap();
+        self.get_idb_thread().send(operation).unwrap();
 
         if receiver
             .recv()
@@ -376,14 +370,12 @@ impl IDBDatabaseMethods<crate::DomTypeHolder> for IDBDatabase {
         // FIXME:(arihant2math)
         // Step 4: If force flag is set, fire a close event
         let (sender, receiver) = ipc::channel(self.global().time_profiler_chan().clone()).unwrap();
-        let operation = SyncOperation::CloseDatabase(
+        let operation = IndexedDBThreadMsg::CloseDatabase(
             sender,
             self.global().origin().immutable().clone(),
             self.name.to_string(),
         );
-        let _ = self
-            .get_idb_thread()
-            .send(IndexedDBThreadMsg::Sync(operation));
+        let _ = self.get_idb_thread().send(operation);
 
         if receiver.recv().is_err() {
             warn!("Database close failed in idb thread");

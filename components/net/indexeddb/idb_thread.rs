@@ -2,24 +2,23 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 use std::borrow::ToOwned;
+use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 
-use ipc_channel::ipc::{self, IpcError, IpcReceiver, IpcSender};
+use ipc_channel::ipc::{self, IpcError, IpcReceiver, IpcSender, TryRecvError};
 use log::{debug, warn};
 use net_traits::indexeddb_thread::{
-    AsyncOperation, BackendError, BackendResult, CreateObjectResult, DbResult, IndexedDBThreadMsg,
-    IndexedDBTxnMode, KeyPath, SyncOperation,
+    BackendError, BackendResult, CreateObjectResult, DbResult, IndexedDBThreadMsg,
+    IndexedDBTxnMode, KeyPath,
 };
-use rustc_hash::FxHashMap;
 use servo_config::pref;
 use servo_url::origin::ImmutableOrigin;
 use uuid::Uuid;
 
-use crate::indexeddb::engines::{KvsEngine, KvsOperation, KvsTransaction, SqliteEngine};
+use crate::indexeddb::engines::{KvsEngine, KvsTransaction, SqliteEngine};
 use crate::resource_thread::CoreResourceThreadPool;
 
 pub trait IndexedDBThreadFactory {
@@ -55,7 +54,7 @@ pub struct IndexedDBDescription {
 
 impl IndexedDBDescription {
     // randomly generated namespace for our purposes
-    const NAMESPACE_SERVO_IDB: &uuid::Uuid = &Uuid::from_bytes([
+    const NAMESPACE_SERVO_IDB: &'static Uuid = &Uuid::from_bytes([
         0x37, 0x9e, 0x56, 0xb0, 0x1a, 0x76, 0x44, 0xc2, 0xa0, 0xdb, 0xe2, 0x18, 0xc5, 0xc8, 0xa3,
         0x5d,
     ]);
@@ -79,53 +78,39 @@ impl IndexedDBDescription {
 
 struct IndexedDBEnvironment<E: KvsEngine> {
     engine: E,
-    transactions: FxHashMap<u64, KvsTransaction>,
-    serial_number_counter: u64,
+    transactions: Vec<KvsTransaction>,
 }
 
 impl<E: KvsEngine> IndexedDBEnvironment<E> {
     fn new(engine: E) -> IndexedDBEnvironment<E> {
         IndexedDBEnvironment {
             engine,
-            transactions: FxHashMap::default(),
-            serial_number_counter: 0,
+            transactions: Vec::default(),
         }
     }
 
-    fn queue_operation(
-        &mut self,
-        store_name: &str,
-        serial_number: u64,
-        mode: IndexedDBTxnMode,
-        operation: AsyncOperation,
-    ) {
-        self.transactions
-            .entry(serial_number)
-            .or_insert_with(|| KvsTransaction {
-                requests: VecDeque::new(),
-                mode,
-            })
-            .requests
-            .push_back(KvsOperation {
-                operation,
-                store_name: String::from(store_name),
-            });
-    }
-
-    // Executes all requests for a transaction (without committing)
-    fn start_transaction(&mut self, txn: u64, sender: Option<IpcSender<BackendResult<()>>>) {
-        // FIXME:(arihant2math) find optimizations in this function
-        //   rather than on the engine level code (less repetition)
-        if let Some(txn) = self.transactions.remove(&txn) {
-            let _ = self.engine.process_transaction(txn).blocking_recv();
-        }
-
-        // We have a sender if the transaction is started manually, and they
-        // probably want to know when it is finished
-        if let Some(sender) = sender {
-            if sender.send(Ok(())).is_err() {
-                warn!("IDBTransaction starter dropped its channel");
+    /// Queues the earliest possible non-conflicting transaction, if found for execution
+    fn start_transaction(&mut self) {
+        // FIXME(arihant2math): this starves write transactions if there is a constant stream of read transactions
+        // Find the earliest transaction that can be started
+        let locked_stores = self.engine.locked_store_names();
+        let to_start_index = self.transactions.iter().position(|txn| {
+            if txn.mode == IndexedDBTxnMode::Readonly {
+                // Readonly transactions can run if no store they access is locked in a non-readonly mode
+                !txn.stores
+                    .iter()
+                    .filter(|&store| locked_stores.contains_key(store))
+                    .any(|store| locked_stores.get(store) != Some(&IndexedDBTxnMode::Readonly))
+            } else {
+                // Readwrite transactions can run if no store they access is locked
+                !txn.stores
+                    .iter()
+                    .any(|store| locked_stores.contains_key(store))
             }
+        });
+        if let Some(index) = to_start_index {
+            let txn = self.transactions.remove(index);
+            self.engine.process_transaction(txn);
         }
     }
 
@@ -226,35 +211,29 @@ impl IndexedDBManager {
 impl IndexedDBManager {
     fn start(&mut self) {
         loop {
-            // FIXME:(arihant2math) No message *most likely* means that
-            // the ipc sender has been dropped, so we break the look
-            let message = match self.port.recv() {
-                Ok(msg) => msg,
-                Err(e) => match e {
-                    IpcError::Disconnected => {
-                        break;
-                    },
-                    other => {
-                        warn!("Error in IndexedDB thread: {:?}", other);
-                        continue;
-                    },
+            let message = match self
+                .port
+                .try_recv_timeout(std::time::Duration::from_millis(100))
+            {
+                Ok(msg) => Some(msg),
+                Err(TryRecvError::IpcError(IpcError::Disconnected)) => {
+                    // No message *most likely* means that the ipc sender has been dropped, so we break the loop
+                    break;
                 },
+                Err(TryRecvError::IpcError(e)) => {
+                    warn!("Error in IndexedDB thread: {:?}", e);
+                    None
+                },
+                Err(TryRecvError::Empty) => None,
             };
-            match message {
-                IndexedDBThreadMsg::Sync(operation) => {
-                    self.handle_sync_operation(operation);
-                },
-                IndexedDBThreadMsg::Async(origin, db_name, store_name, txn, mode, operation) => {
-                    if let Some(db) = self.get_database_mut(origin, db_name) {
-                        // Queues an operation for a transaction without starting it
-                        db.queue_operation(&store_name, txn, mode, operation);
-                        // FIXME:(arihant2math) Schedule transactions properly
-                        // while db.transactions.iter().any(|s| s.1.mode == IndexedDBTxnMode::Readwrite) {
-                        //     std::hint::spin_loop();
-                        // }
-                        db.start_transaction(txn, None);
-                    }
-                },
+            if let Some(message) = message {
+                self.handle_operation(message);
+            } else {
+                // No message, try to start queued transactions
+                for (_, db) in self.databases.iter_mut() {
+                    db.start_transaction();
+                }
+                std::hint::spin_loop()
             }
         }
     }
@@ -285,9 +264,9 @@ impl IndexedDBManager {
         self.databases.get_mut(&idb_description)
     }
 
-    fn handle_sync_operation(&mut self, operation: SyncOperation) {
+    fn handle_operation(&mut self, operation: IndexedDBThreadMsg) {
         match operation {
-            SyncOperation::CloseDatabase(sender, origin, db_name) => {
+            IndexedDBThreadMsg::CloseDatabase(sender, origin, db_name) => {
                 let idb_description = IndexedDBDescription {
                     origin,
                     name: db_name,
@@ -297,7 +276,7 @@ impl IndexedDBManager {
                 }
                 let _ = sender.send(Ok(()));
             },
-            SyncOperation::OpenDatabase(sender, origin, db_name, version) => {
+            IndexedDBThreadMsg::OpenDatabase(sender, origin, db_name, version) => {
                 let idb_description = IndexedDBDescription {
                     origin,
                     name: db_name,
@@ -325,7 +304,7 @@ impl IndexedDBManager {
                     },
                 }
             },
-            SyncOperation::DeleteDatabase(sender, origin, db_name) => {
+            IndexedDBThreadMsg::DeleteDatabase(sender, origin, db_name) => {
                 // https://w3c.github.io/IndexedDB/#delete-a-database
                 // Step 4. Let db be the database named name in storageKey,
                 // if one exists. Otherwise, return 0 (zero).
@@ -339,19 +318,19 @@ impl IndexedDBManager {
                     let _ = sender.send(Ok(()));
                 }
             },
-            SyncOperation::HasKeyGenerator(sender, origin, db_name, store_name) => {
+            IndexedDBThreadMsg::HasKeyGenerator(sender, origin, db_name, store_name) => {
                 let result = self
                     .get_database(origin, db_name)
                     .map(|db| db.has_key_generator(&store_name));
                 let _ = sender.send(result.ok_or(BackendError::DbNotFound));
             },
-            SyncOperation::KeyPath(sender, origin, db_name, store_name) => {
+            IndexedDBThreadMsg::KeyPath(sender, origin, db_name, store_name) => {
                 let result = self
                     .get_database(origin, db_name)
                     .map(|db| db.key_path(&store_name));
                 let _ = sender.send(result.ok_or(BackendError::DbNotFound));
             },
-            SyncOperation::CreateIndex(
+            IndexedDBThreadMsg::CreateIndex(
                 sender,
                 origin,
                 db_name,
@@ -369,7 +348,7 @@ impl IndexedDBManager {
                     let _ = sender.send(Err(BackendError::DbNotFound));
                 }
             },
-            SyncOperation::DeleteIndex(sender, origin, db_name, store_name, index_name) => {
+            IndexedDBThreadMsg::DeleteIndex(sender, origin, db_name, store_name, index_name) => {
                 if let Some(db) = self.get_database(origin, db_name) {
                     let result = db.delete_index(&store_name, index_name);
                     let _ = sender.send(result.map_err(BackendError::from));
@@ -377,11 +356,7 @@ impl IndexedDBManager {
                     let _ = sender.send(Err(BackendError::DbNotFound));
                 }
             },
-            SyncOperation::Commit(sender, _origin, _db_name, _txn) => {
-                // FIXME:(arihant2math) This does nothing at the moment
-                let _ = sender.send(Ok(()));
-            },
-            SyncOperation::UpgradeVersion(sender, origin, db_name, _txn, version) => {
+            IndexedDBThreadMsg::UpgradeVersion(sender, origin, db_name, version) => {
                 if let Some(db) = self.get_database_mut(origin, db_name) {
                     if version > db.version().unwrap_or(0) {
                         let _ = db.set_version(version);
@@ -392,7 +367,7 @@ impl IndexedDBManager {
                     let _ = sender.send(Err(BackendError::DbNotFound));
                 }
             },
-            SyncOperation::CreateObjectStore(
+            IndexedDBThreadMsg::CreateObjectStore(
                 sender,
                 origin,
                 db_name,
@@ -407,7 +382,7 @@ impl IndexedDBManager {
                     let _ = sender.send(Err(BackendError::DbNotFound));
                 }
             },
-            SyncOperation::DeleteObjectStore(sender, origin, db_name, store_name) => {
+            IndexedDBThreadMsg::DeleteObjectStore(sender, origin, db_name, store_name) => {
                 if let Some(db) = self.get_database_mut(origin, db_name) {
                     let result = db.delete_object_store(&store_name);
                     let _ = sender.send(result.map_err(BackendError::from));
@@ -415,27 +390,31 @@ impl IndexedDBManager {
                     let _ = sender.send(Err(BackendError::DbNotFound));
                 }
             },
-            SyncOperation::StartTransaction(sender, origin, db_name, txn) => {
-                if let Some(db) = self.get_database_mut(origin, db_name) {
-                    db.start_transaction(txn, Some(sender));
-                } else {
-                    let _ = sender.send(Err(BackendError::DbNotFound));
-                }
-            },
-            SyncOperation::Version(sender, origin, db_name) => {
+            IndexedDBThreadMsg::Version(sender, origin, db_name) => {
                 if let Some(db) = self.get_database(origin, db_name) {
                     let _ = sender.send(db.version().map_err(BackendError::from));
                 } else {
                     let _ = sender.send(Err(BackendError::DbNotFound));
                 }
             },
-            SyncOperation::RegisterNewTxn(sender, origin, db_name) => {
+            IndexedDBThreadMsg::RegisterNewTxn(sender, origin, db_name, scope, txn_mode) => {
                 if let Some(db) = self.get_database_mut(origin, db_name) {
-                    db.serial_number_counter += 1;
-                    let _ = sender.send(db.serial_number_counter);
+                    let (state_change_sender, state_change_receiver) = ipc::channel().unwrap();
+                    let (operation_sender, operation_receiver) = ipc::channel().unwrap();
+                    let _ = sender.send(Ok((state_change_receiver, operation_sender)));
+                    let txn = KvsTransaction {
+                        mode: txn_mode,
+                        stores: scope,
+                        state_change_sender,
+                        operations: operation_receiver,
+                        start: chrono::Utc::now(),
+                    };
+                    db.transactions.push(txn);
+                } else {
+                    let _ = sender.send(Err(BackendError::DbNotFound));
                 }
             },
-            SyncOperation::Exit(sender) => {
+            IndexedDBThreadMsg::Exit(sender) => {
                 // FIXME:(rasviitanen) Nothing to do?
                 let _ = sender.send(());
             },

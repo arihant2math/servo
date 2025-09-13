@@ -6,7 +6,7 @@ use std::cmp::{Ordering, PartialEq, PartialOrd};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 
-use ipc_channel::ipc::IpcSender;
+use ipc_channel::ipc::{IpcReceiver, IpcSender};
 use malloc_size_of_derive::MallocSizeOf;
 use serde::{Deserialize, Serialize};
 use servo_url::origin::ImmutableOrigin;
@@ -48,7 +48,7 @@ pub enum KeyPath {
 }
 
 // https://www.w3.org/TR/IndexedDB-2/#enumdef-idbtransactionmode
-#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum IndexedDBTxnMode {
     Readonly,
     Readwrite,
@@ -322,20 +322,31 @@ pub enum AsyncOperation {
     ReadWrite(AsyncReadWriteOperation),
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct StoreOperation {
+    pub store_name: String,
+    pub operation: AsyncOperation,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub enum KvsOperation {
+    Store(StoreOperation),
+    Wait(IpcSender<BackendResult<()>>),
+    Commit(IpcSender<BackendResult<()>>),
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub enum CreateObjectResult {
     Created,
     AlreadyExists,
 }
-
 #[derive(Debug, Deserialize, Serialize)]
-pub enum SyncOperation {
+pub enum IndexedDBThreadMsg {
     /// Upgrades the version of the database
     UpgradeVersion(
         IpcSender<BackendResult<u64>>,
         ImmutableOrigin,
         String, // Database
-        u64,    // Serial number for the transaction
         u64,    // Version to upgrade to
     ),
     /// Checks if an object store has a key generator, used in e.g. Put
@@ -352,14 +363,6 @@ pub enum SyncOperation {
         ImmutableOrigin,
         String, // Database
         String, // Store
-    ),
-
-    /// Commits changes of a transaction to the database
-    Commit(
-        IpcSender<BackendResult<()>>,
-        ImmutableOrigin,
-        String, // Database
-        u64,    // Transaction serial number
     ),
 
     /// Creates a new index for the database
@@ -422,20 +425,17 @@ pub enum SyncOperation {
     /// Returns an unique identifier that is used to be able to
     /// commit/abort transactions.
     RegisterNewTxn(
-        IpcSender<u64>,
+        IpcSender<
+            BackendResult<(
+                IpcReceiver<IndexedDBTransactionState>,
+                IpcSender<KvsOperation>,
+            )>,
+        >,
         ImmutableOrigin,
-        String, // Database
+        String,           // Database
+        Vec<String>,      // Scope
+        IndexedDBTxnMode, // Mode
     ),
-
-    /// Starts executing the requests of a transaction
-    /// <https://www.w3.org/TR/IndexedDB-2/#transaction-start>
-    StartTransaction(
-        IpcSender<BackendResult<()>>,
-        ImmutableOrigin,
-        String, // Database
-        u64,    // The serial number of the mutating transaction
-    ),
-
     /// Returns the version of the database
     Version(
         IpcSender<BackendResult<u64>>,
@@ -447,15 +447,13 @@ pub enum SyncOperation {
     Exit(IpcSender<()>),
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub enum IndexedDBThreadMsg {
-    Sync(SyncOperation),
-    Async(
-        ImmutableOrigin,
-        String, // Database
-        String, // ObjectStore
-        u64,    // Serial number of the transaction that requests this operation
-        IndexedDBTxnMode,
-        AsyncOperation,
-    ),
+#[derive(Clone, Copy, Debug, Deserialize, MallocSizeOf, PartialEq, Serialize)]
+pub enum IndexedDBTransactionState {
+    // Part of the active flag: https://www.w3.org/TR/IndexedDB-2/#transaction-active-flag
+    Active,
+    Started,
+    Committing,
+    Aborted,
+    // https://www.w3.org/TR/IndexedDB-2/#transaction-finish
+    Finished,
 }

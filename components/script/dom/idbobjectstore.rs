@@ -9,7 +9,7 @@ use js::rust::HandleValue;
 use net_traits::IpcSend;
 use net_traits::indexeddb_thread::{
     AsyncOperation, AsyncReadOnlyOperation, AsyncReadWriteOperation, IndexedDBKeyType,
-    IndexedDBThreadMsg, SyncOperation,
+    IndexedDBThreadMsg,
 };
 use profile_traits::ipc;
 use script_bindings::conversions::SafeToJSValConvertible;
@@ -123,17 +123,14 @@ impl IDBObjectStore {
     fn has_key_generator(&self) -> bool {
         let (sender, receiver) = ipc::channel(self.global().time_profiler_chan().clone()).unwrap();
 
-        let operation = SyncOperation::HasKeyGenerator(
+        let operation = IndexedDBThreadMsg::HasKeyGenerator(
             sender,
             self.global().origin().immutable().clone(),
             self.db_name.to_string(),
             self.name.borrow().to_string(),
         );
 
-        self.global()
-            .resource_threads()
-            .send(IndexedDBThreadMsg::Sync(operation))
-            .unwrap();
+        self.global().resource_threads().send(operation).unwrap();
 
         // First unwrap for ipc
         // Second unwrap will never happen unless this db gets manually deleted somehow

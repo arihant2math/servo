@@ -7,7 +7,7 @@ use ipc_channel::router::ROUTER;
 use js::jsval::UndefinedValue;
 use js::rust::HandleValue;
 use net_traits::IpcSend;
-use net_traits::indexeddb_thread::{BackendResult, IndexedDBThreadMsg, SyncOperation};
+use net_traits::indexeddb_thread::{BackendResult, IndexedDBThreadMsg};
 use profile_traits::ipc;
 use script_bindings::conversions::SafeToJSValConvertible;
 use stylo_atoms::Atom;
@@ -232,7 +232,7 @@ impl IDBOpenDBRequest {
             open_request: Trusted::new(self),
         };
 
-        let open_operation = SyncOperation::OpenDatabase(
+        let open_operation = IndexedDBThreadMsg::OpenDatabase(
             sender,
             global.origin().immutable().clone(),
             name.to_string(),
@@ -286,11 +286,7 @@ impl IDBOpenDBRequest {
             }),
         );
 
-        if global
-            .resource_threads()
-            .send(IndexedDBThreadMsg::Sync(open_operation))
-            .is_err()
-        {
+        if global.resource_threads().send(open_operation).is_err() {
             return Err(());
         }
         Ok(())
@@ -309,7 +305,7 @@ impl IDBOpenDBRequest {
         };
 
         let delete_operation =
-            SyncOperation::DeleteDatabase(sender, global.origin().immutable().clone(), name);
+            IndexedDBThreadMsg::DeleteDatabase(sender, global.origin().immutable().clone(), name);
 
         ROUTER.add_typed_route(
             receiver.to_ipc_receiver(),
@@ -321,11 +317,7 @@ impl IDBOpenDBRequest {
             }),
         );
 
-        if global
-            .resource_threads()
-            .send(IndexedDBThreadMsg::Sync(delete_operation))
-            .is_err()
-        {
+        if global.resource_threads().send(delete_operation).is_err() {
             return Err(());
         }
         Ok(())
