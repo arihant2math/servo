@@ -150,7 +150,7 @@ use media::WindowGLContext;
 use net::image_cache::ImageCacheImpl;
 use net_traits::image_cache::ImageCache;
 use net_traits::pub_domains::reg_host;
-use net_traits::request::Referrer;
+use net_traits::request::{Origin, Referrer};
 use net_traits::storage_thread::{StorageThreadMsg, StorageType};
 use net_traits::{
     self, AsyncRuntime, IpcSend, ReferrerPolicy, ResourceThreads, exit_fetch_thread,
@@ -176,7 +176,7 @@ use webgpu_traits::{WebGPU, WebGPURequest};
 use webrender::RenderApiSender;
 use webrender_api::units::LayoutVector2D;
 use webrender_api::{DocumentId, ExternalScrollId, ImageKey};
-
+use url::Url;
 use crate::broadcastchannel::BroadcastChannels;
 use crate::browsingcontext::{
     AllBrowsingContextsIterator, BrowsingContext, FullyActiveBrowsingContextsIterator,
@@ -491,6 +491,9 @@ pub struct Constellation<STF, SWF> {
 
     /// The image cache for the single-process mode
     image_cache: Box<dyn ImageCache>,
+
+    /// Shared worker map
+    shared_workers: HashMap<Origin, SharedWorkerManager>
 }
 
 /// State needed to construct a constellation.

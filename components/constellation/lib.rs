@@ -18,6 +18,7 @@ mod process_manager;
 mod sandboxing;
 mod serviceworker;
 mod session_history;
+mod sharedworker;
 mod webview_manager;
 
 pub use crate::constellation::{Constellation, InitialConstellationState};
