@@ -3,24 +3,22 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 use std::borrow::ToOwned;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::thread;
-
+use std::thread::JoinHandle;
+use dashmap::DashMap;
 use base::threadpool::ThreadPool;
 use ipc_channel::ipc::{self, IpcError, IpcReceiver, IpcSender};
 use log::{debug, warn};
-use rustc_hash::FxHashMap;
 use servo_config::pref;
 use servo_url::origin::ImmutableOrigin;
-use storage_traits::indexeddb_thread::{
-    AsyncOperation, BackendError, BackendResult, CreateObjectResult, DbResult, IndexedDBThreadMsg,
-    IndexedDBTxnMode, KeyPath, SyncOperation,
-};
+use storage_traits::indexeddb_thread::{create_transaction_channel, BackendError, BackendResult, CreateObjectResult, DbResult, IndexedDBThreadMsg, IndexedDBTxnMode, KeyPath, SyncOperation, TransactionSender};
 use uuid::Uuid;
 
-use crate::indexeddb::engines::{KvsEngine, KvsOperation, KvsTransaction, SqliteEngine};
+use crate::indexeddb::engines::{KvsEngine, KvsTransaction, SqliteEngine};
 
 pub trait IndexedDBThreadFactory {
     fn new(config_dir: Option<PathBuf>) -> Self;
@@ -77,56 +75,108 @@ impl IndexedDBDescription {
     }
 }
 
-struct IndexedDBEnvironment<E: KvsEngine> {
-    engine: E,
-    transactions: FxHashMap<u64, KvsTransaction>,
-    serial_number_counter: u64,
+type Notifier = Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>;
+
+struct IndexedDBScheduler<E: KvsEngine> {
+    engine: Arc<E>,
+    // Maps transaction id to the transaction mode
+    pending_transactions: Arc<DashMap<u64, KvsTransaction>>,
+    shutdown: Arc<AtomicBool>,
+    new_transaction_notifier: Notifier,
 }
 
-impl<E: KvsEngine> IndexedDBEnvironment<E> {
-    fn new(engine: E) -> IndexedDBEnvironment<E> {
-        IndexedDBEnvironment {
+impl<E: KvsEngine> IndexedDBScheduler<E> {
+    fn new(
+        engine: Arc<E>,
+        pending_transactions: Arc<DashMap<u64, KvsTransaction>>,
+        shutdown: Arc<AtomicBool>,
+        new_transaction_notifier: Notifier,
+    ) -> IndexedDBScheduler<E> {
+        IndexedDBScheduler {
             engine,
-            transactions: FxHashMap::default(),
-            serial_number_counter: 0,
+            pending_transactions,
+            shutdown,
+            new_transaction_notifier,
         }
     }
 
-    fn queue_operation(
-        &mut self,
-        store_name: &str,
-        serial_number: u64,
-        mode: IndexedDBTxnMode,
-        operation: AsyncOperation,
-    ) {
-        self.transactions
-            .entry(serial_number)
-            .or_insert_with(|| KvsTransaction {
-                requests: VecDeque::new(),
-                mode,
-            })
-            .requests
-            .push_back(KvsOperation {
-                operation,
-                store_name: String::from(store_name),
-            });
-    }
-
-    // Executes all requests for a transaction (without committing)
-    fn start_transaction(&mut self, txn: u64, sender: Option<IpcSender<BackendResult<()>>>) {
-        // FIXME:(arihant2math) find optimizations in this function
-        //   rather than on the engine level code (less repetition)
-        if let Some(txn) = self.transactions.remove(&txn) {
-            let _ = self.engine.process_transaction(txn).blocking_recv();
-        }
-
-        // We have a sender if the transaction is started manually, and they
-        // probably want to know when it is finished
-        if let Some(sender) = sender {
-            if sender.send(Ok(())).is_err() {
-                warn!("IDBTransaction starter dropped its channel");
+    fn start(self) {
+        // This scheduler takes the pending transactions and processes them one by one
+        // in the order of their transaction id (which is monotonically increasing)
+        // it waits for them to finish before processing the next one
+        while !self.shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+            if let Some(txn) = self
+                .pending_transactions
+                .iter()
+                .min_by_key(|t| *t.key()) {
+                // Remove the transaction from the pending list
+                let txn = self.pending_transactions.remove(&txn.key()).unwrap().1;
+                let _ = self.engine.process_transaction(txn).blocking_recv();
+            } else {
+                // wait for new transaction
+                let (lock, cvar) = &*self.new_transaction_notifier;
+                let mut started = lock.lock().unwrap();
+                while !*started {
+                    started = cvar.wait(started).unwrap();
+                }
+                *started = false;
+                continue;
             }
         }
+    }
+}
+
+struct IndexedDBEnvironment<E: KvsEngine> {
+    engine: Arc<E>,
+    transactions: Arc<DashMap<u64, KvsTransaction>>,
+    serial_number_counter: u64,
+    scheduling_thread: JoinHandle<()>,
+    shutdown: Arc<AtomicBool>,
+    new_transaction_notifier: Notifier,
+}
+
+impl<E: KvsEngine + Send + Sync + 'static> IndexedDBEnvironment<E> {
+    fn new(engine: E) -> IndexedDBEnvironment<E> {
+        let engine = Arc::new(engine);
+        let transactions = Arc::new(DashMap::default());
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let new_transaction_notifier = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let scheduling_thread = thread::spawn({
+            let engine = engine.clone();
+            let transactions = transactions.clone();
+            let shutdown = shutdown.clone();
+            let new_transaction_notifier = new_transaction_notifier.clone();
+            || {
+                IndexedDBScheduler::new(
+                    engine,
+                    transactions,
+                    shutdown,
+                    new_transaction_notifier,
+                )
+                .start();
+            }
+        });
+        IndexedDBEnvironment {
+            engine,
+            transactions,
+            serial_number_counter: 0,
+            scheduling_thread,
+            shutdown,
+            new_transaction_notifier,
+        }
+    }
+
+    fn create_transaction(&mut self, mode: IndexedDBTxnMode, stores: Vec<String>) -> TransactionSender {
+        self.serial_number_counter += 1;
+        let (sender, receiver) = create_transaction_channel();
+        let txn = KvsTransaction { mode, stores, receiver };
+        self.transactions.insert(self.serial_number_counter, txn);
+        // Notify the scheduling thread that a new transaction is available
+        let (lock, cvar) = &*self.new_transaction_notifier;
+        let mut started = lock.lock().unwrap();
+        *started = true;
+        cvar.notify_one();
+        sender
     }
 
     fn has_key_generator(&self, store_name: &str) -> bool {
@@ -173,7 +223,13 @@ impl<E: KvsEngine> IndexedDBEnvironment<E> {
     }
 
     fn delete_database(self, sender: IpcSender<BackendResult<()>>) {
-        let result = self.engine.delete_database();
+        // Signal the scheduling thread to shutdown
+        self.shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        // Wait for the scheduling thread to finish
+        let _ = self.scheduling_thread.join();
+        // Now it is safe to delete the database
+        let engine = Arc::into_inner(self.engine).unwrap();
+        let result = engine.delete_database();
         let _ = sender.send(
             result
                 .map_err(|err| format!("{err:?}"))
@@ -240,17 +296,6 @@ impl IndexedDBManager {
             match message {
                 IndexedDBThreadMsg::Sync(operation) => {
                     self.handle_sync_operation(operation);
-                },
-                IndexedDBThreadMsg::Async(origin, db_name, store_name, txn, mode, operation) => {
-                    if let Some(db) = self.get_database_mut(origin, db_name) {
-                        // Queues an operation for a transaction without starting it
-                        db.queue_operation(&store_name, txn, mode, operation);
-                        // FIXME:(arihant2math) Schedule transactions properly
-                        // while db.transactions.iter().any(|s| s.1.mode == IndexedDBTxnMode::Readwrite) {
-                        //     std::hint::spin_loop();
-                        // }
-                        db.start_transaction(txn, None);
-                    }
                 },
             }
         }
@@ -378,17 +423,6 @@ impl IndexedDBManager {
                 // FIXME:(arihant2math) This does nothing at the moment
                 let _ = sender.send(Ok(()));
             },
-            SyncOperation::UpgradeVersion(sender, origin, db_name, _txn, version) => {
-                if let Some(db) = self.get_database_mut(origin, db_name) {
-                    if version > db.version().unwrap_or(0) {
-                        let _ = db.set_version(version);
-                    }
-                    // erroring out if the version is not upgraded can be and non-replicable
-                    let _ = sender.send(db.version().map_err(BackendError::from));
-                } else {
-                    let _ = sender.send(Err(BackendError::DbNotFound));
-                }
-            },
             SyncOperation::CreateObjectStore(
                 sender,
                 origin,
@@ -412,13 +446,6 @@ impl IndexedDBManager {
                     let _ = sender.send(Err(BackendError::DbNotFound));
                 }
             },
-            SyncOperation::StartTransaction(sender, origin, db_name, txn) => {
-                if let Some(db) = self.get_database_mut(origin, db_name) {
-                    db.start_transaction(txn, Some(sender));
-                } else {
-                    let _ = sender.send(Err(BackendError::DbNotFound));
-                }
-            },
             SyncOperation::Version(sender, origin, db_name) => {
                 if let Some(db) = self.get_database(origin, db_name) {
                     let _ = sender.send(db.version().map_err(BackendError::from));
@@ -426,10 +453,10 @@ impl IndexedDBManager {
                     let _ = sender.send(Err(BackendError::DbNotFound));
                 }
             },
-            SyncOperation::RegisterNewTxn(sender, origin, db_name) => {
+            SyncOperation::CreateTransaction(sender, origin, db_name, stores, mode) => {
                 if let Some(db) = self.get_database_mut(origin, db_name) {
-                    db.serial_number_counter += 1;
-                    let _ = sender.send(db.serial_number_counter);
+                    let txn_sender = db.create_transaction(mode, stores);
+                    let _ = sender.send(txn_sender);
                 }
             },
             SyncOperation::Exit(sender) => {

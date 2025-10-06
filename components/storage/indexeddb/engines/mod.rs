@@ -2,29 +2,25 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use std::collections::VecDeque;
-
-use storage_traits::indexeddb_thread::{
-    AsyncOperation, CreateObjectResult, IndexedDBTxnMode, KeyPath,
-};
+use storage_traits::indexeddb_thread::{CreateObjectResult, IndexedDBTxnMode, KeyPath, TransactionReceiver};
 use tokio::sync::oneshot;
 
 pub use self::sqlite::SqliteEngine;
 
 mod sqlite;
 
-pub struct KvsOperation {
-    pub store_name: String,
-    pub operation: AsyncOperation,
-}
-
 pub struct KvsTransaction {
     // Mode could be used by a more optimal implementation of transactions
     // that has different allocated threadpools for reading and writing
     #[allow(unused)]
     pub mode: IndexedDBTxnMode,
-    pub requests: VecDeque<KvsOperation>,
+    pub stores: Vec<String>,
+    pub receiver: TransactionReceiver,
 }
+
+// TODO: not actually safe
+unsafe impl Send for KvsTransaction {}
+unsafe impl Sync for KvsTransaction {}
 
 pub trait KvsEngine {
     type Error: std::error::Error;

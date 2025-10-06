@@ -36,6 +36,10 @@ impl DOMStringList {
             can_gc,
         )
     }
+
+    pub(crate) fn to_vec(&self) -> Vec<DOMString> {
+        self.strings.clone()
+    }
 }
 
 // https://html.spec.whatwg.org/multipage/#domstringlist

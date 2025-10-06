@@ -11,11 +11,7 @@ use rusqlite::{Connection, Error, OptionalExtension, params};
 use sea_query::{Condition, Expr, ExprTrait, IntoCondition, SqliteQueryBuilder};
 use sea_query_rusqlite::RusqliteBinder;
 use serde::Serialize;
-use storage_traits::indexeddb_thread::{
-    AsyncOperation, AsyncReadOnlyOperation, AsyncReadWriteOperation, BackendError, BackendResult,
-    CreateObjectResult, IndexedDBKeyRange, IndexedDBKeyType, IndexedDBRecord, IndexedDBTxnMode,
-    KeyPath, PutItemResult,
-};
+use storage_traits::indexeddb_thread::{AsyncOperation, AsyncReadOnlyOperation, AsyncReadWriteOperation, BackendError, BackendResult, CreateObjectResult, IndexedDBKeyRange, IndexedDBKeyType, IndexedDBRecord, IndexedDBTxnMode, KeyPath, KvsOperation, PutItemResult, TransactionState};
 use tokio::sync::oneshot;
 
 use crate::indexeddb::engines::{KvsEngine, KvsTransaction};
@@ -313,6 +309,24 @@ impl SqliteEngine {
         )?;
         Ok(IndexedDBKeyType::Number(new_key as f64))
     }
+
+
+    fn get_version(connection: &Connection) -> Result<u64, Error> {
+        let version: i64 =
+            connection.query_row("SELECT version FROM database LIMIT 1", [], |row| row.get(0))?;
+        Ok(u64::from_ne_bytes(version.to_ne_bytes()))
+    }
+
+    fn set_version(connection: &Connection, version: u64) -> Result<(), Error> {
+        let rows_affected = connection.execute(
+            "UPDATE database SET version = ?",
+            params![i64::from_ne_bytes(version.to_ne_bytes())],
+        )?;
+        if rows_affected == 0 {
+            return Err(Error::QueryReturnedNoRows);
+        }
+        Ok(())
+    }
 }
 
 impl KvsEngine for SqliteEngine {
@@ -387,11 +401,34 @@ impl KvsEngine for SqliteEngine {
         let path = self.db_path.clone();
         spawning_pool.spawn(move || {
             let connection = Connection::open(path).unwrap();
-            for request in transaction.requests {
+            while let Ok(request) = transaction.receiver.requests.recv() {
+                let (store_name, operation) = match request {
+                    KvsOperation::Store { store_name, operation } => (store_name, operation),
+                    KvsOperation::UpgradeVersion { version, sender} => {
+                        if version > Self::get_version(&connection).unwrap_or(0) {
+                            let _ = Self::set_version(&connection, version);
+                        }
+                        let _ = sender.send(Ok(Self::get_version(&connection).unwrap_or(0)));
+                        continue;
+                    },
+                    KvsOperation::Wait(sender) => {
+                        let _ = sender.send(());
+                        continue;
+                    },
+                    KvsOperation::Commit(sender) => {
+                        *transaction.receiver.state.lock().unwrap() = TransactionState::Committing;
+                        let _ = sender.send(Ok(()));
+                        break;
+                    },
+                    KvsOperation::Abort => {
+                        *transaction.receiver.state.lock().unwrap() = TransactionState::Aborted;
+                        break;
+                    },
+                };
                 let object_store = connection
                     .prepare("SELECT * FROM object_store WHERE name = ?")
                     .and_then(|mut stmt| {
-                        stmt.query_row(params![request.store_name.to_string()], |row| {
+                        stmt.query_row(params![store_name.clone()], |row| {
                             object_store_model::Model::try_from(row)
                         })
                         .optional()
@@ -416,7 +453,7 @@ impl KvsEngine for SqliteEngine {
                     }
                 }
 
-                match request.operation {
+                match operation {
                     AsyncOperation::ReadWrite(AsyncReadWriteOperation::PutItem {
                         sender,
                         key,
@@ -563,6 +600,7 @@ impl KvsEngine for SqliteEngine {
                     },
                 }
             }
+            *transaction.receiver.state.lock().unwrap() = TransactionState::Finished;
             let _ = tx.send(None);
         });
         rx
@@ -672,3 +710,7 @@ impl KvsEngine for SqliteEngine {
         Ok(())
     }
 }
+
+// TODO: not actually safe, but since we don't use the connection across threads it should be fine
+unsafe impl Send for SqliteEngine {}
+unsafe impl Sync for SqliteEngine {}

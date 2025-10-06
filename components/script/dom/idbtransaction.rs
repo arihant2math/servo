@@ -2,7 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use std::cell::Cell;
 use std::collections::HashMap;
 
 use base::IpcSend;
@@ -10,7 +9,7 @@ use dom_struct::dom_struct;
 use ipc_channel::ipc::IpcSender;
 use profile_traits::ipc;
 use script_bindings::codegen::GenericUnionTypes::StringOrStringSequence;
-use storage_traits::indexeddb_thread::{IndexedDBThreadMsg, KeyPath, SyncOperation};
+use storage_traits::indexeddb_thread::{IndexedDBThreadMsg, IndexedDBTxnMode, KeyPath, KvsOperation, SyncOperation, TransactionSender, TransactionState};
 use stylo_atoms::Atom;
 
 use crate::dom::bindings::cell::DomRefCell;
@@ -46,13 +45,10 @@ pub struct IDBTransaction {
     store_handles: DomRefCell<HashMap<String, Dom<IDBObjectStore>>>,
     // https://www.w3.org/TR/IndexedDB-2/#transaction-request-list
     requests: DomRefCell<Vec<Dom<IDBRequest>>>,
-    // https://www.w3.org/TR/IndexedDB-2/#transaction-active-flag
-    active: Cell<bool>,
-    // https://www.w3.org/TR/IndexedDB-2/#transaction-finish
-    finished: Cell<bool>,
-    // An unique identifier, used to commit and revert this transaction
-    // FIXME:(rasviitanen) Replace this with a channel
-    serial_number: u64,
+    // Sender that maintains the transaction state and allows us to queue requests
+    #[ignore_malloc_size_of = "TODO"]
+    #[no_trace]
+    sender: TransactionSender,
 }
 
 impl IDBTransaction {
@@ -60,7 +56,7 @@ impl IDBTransaction {
         connection: &IDBDatabase,
         mode: IDBTransactionMode,
         scope: &DOMStringList,
-        serial_number: u64,
+        sender: TransactionSender,
     ) -> IDBTransaction {
         IDBTransaction {
             eventtarget: EventTarget::new_inherited(),
@@ -71,9 +67,7 @@ impl IDBTransaction {
 
             store_handles: Default::default(),
             requests: Default::default(),
-            active: Cell::new(true),
-            finished: Cell::new(false),
-            serial_number,
+            sender,
         }
     }
 
@@ -84,13 +78,13 @@ impl IDBTransaction {
         scope: &DOMStringList,
         can_gc: CanGc,
     ) -> DomRoot<IDBTransaction> {
-        let serial_number = IDBTransaction::register_new(global, connection.get_name());
+        let sender = IDBTransaction::register_new(global, connection.get_name(), scope, mode);
         reflect_dom_object(
             Box::new(IDBTransaction::new_inherited(
                 connection,
                 mode,
                 scope,
-                serial_number,
+                sender,
             )),
             global,
             can_gc,
@@ -102,15 +96,21 @@ impl IDBTransaction {
     // and allows us to commit/abort transactions running in our idb thread.
     // FIXME:(rasviitanen) We could probably replace this with a channel instead,
     // and queue requests directly to that channel.
-    fn register_new(global: &GlobalScope, db_name: DOMString) -> u64 {
+    fn register_new(global: &GlobalScope, db_name: DOMString, scope: &DOMStringList, mode: IDBTransactionMode) -> TransactionSender {
         let (sender, receiver) = ipc::channel(global.time_profiler_chan().clone()).unwrap();
-
+        let mode = match mode {
+            IDBTransactionMode::Readonly => IndexedDBTxnMode::Readonly,
+            IDBTransactionMode::Readwrite => IndexedDBTxnMode::Readwrite,
+            IDBTransactionMode::Versionchange => IndexedDBTxnMode::Versionchange,
+        };
         global
             .storage_threads()
-            .send(IndexedDBThreadMsg::Sync(SyncOperation::RegisterNewTxn(
+            .send(IndexedDBThreadMsg::Sync(SyncOperation::CreateTransaction(
                 sender,
                 global.origin().immutable().clone(),
                 db_name.to_string(),
+                scope.to_vec().into_iter().map(|s| s.to_string()).collect(),
+                mode,
             )))
             .unwrap();
 
@@ -119,32 +119,24 @@ impl IDBTransaction {
 
     // Runs the transaction and waits for it to finish
     pub fn wait(&self) {
-        // Start the transaction
         let (sender, receiver) = ipc::channel(self.global().time_profiler_chan().clone()).unwrap();
+        let commit_operation = KvsOperation::Wait(sender);
 
-        let start_operation = SyncOperation::StartTransaction(
-            sender,
-            self.global().origin().immutable().clone(),
-            self.db.get_name().to_string(),
-            self.serial_number,
-        );
+        self.sender.send(commit_operation).unwrap();
 
-        self.get_idb_thread()
-            .send(IndexedDBThreadMsg::Sync(start_operation))
-            .unwrap();
-
-        // Wait for transaction to complete
-        if receiver.recv().is_err() {
-            warn!("IDBtransaction failed to run");
-        };
+        let _ = receiver.recv();
     }
 
     pub fn set_active_flag(&self, status: bool) {
-        self.active.set(status)
+        if status {
+            *self.sender.state.lock().unwrap() = TransactionState::Active;
+        } else {
+            *self.sender.state.lock().unwrap() = TransactionState::Inactive;
+        }
     }
 
     pub fn is_active(&self) -> bool {
-        self.active.get()
+        matches!(*self.sender.state.lock().unwrap(), TransactionState::Active)
     }
 
     pub fn get_mode(&self) -> IDBTransactionMode {
@@ -155,8 +147,8 @@ impl IDBTransaction {
         self.db.get_name()
     }
 
-    pub fn get_serial_number(&self) -> u64 {
-        self.serial_number
+    pub fn queue_operation(&self, operation: KvsOperation) -> Fallible<()> {
+        self.sender.send(operation).map_err(|_| Error::TransactionInactive)
     }
 
     pub fn add_request(&self, request: &IDBRequest) {
@@ -168,16 +160,12 @@ impl IDBTransaction {
         self.wait();
         // Queue a request to upgrade the db version
         let (sender, receiver) = ipc::channel(self.global().time_profiler_chan().clone()).unwrap();
-        let upgrade_version_operation = SyncOperation::UpgradeVersion(
+        let upgrade_version_operation = KvsOperation::UpgradeVersion {
             sender,
-            self.global().origin().immutable().clone(),
-            self.db.get_name().to_string(),
-            self.serial_number,
-            version,
-        );
-        self.get_idb_thread()
-            .send(IndexedDBThreadMsg::Sync(upgrade_version_operation))
-            .unwrap();
+            version
+        };
+        self.queue_operation(upgrade_version_operation)
+            .expect("failed to queue version upgrade operation");
         // Wait for the version to be updated
         // TODO(jdm): This returns a Result; what do we do with an error?
         let _ = receiver.recv().unwrap();
@@ -262,7 +250,7 @@ impl IDBTransactionMethods<crate::DomTypeHolder> for IDBTransaction {
     // https://www.w3.org/TR/IndexedDB-2/#dom-idbtransaction-objectstore
     fn ObjectStore(&self, name: DOMString) -> Fallible<DomRoot<IDBObjectStore>> {
         // Step 1: If transaction has finished, throw an "InvalidStateError" DOMException.
-        if self.finished.get() {
+        if *self.sender.state.lock().unwrap() == TransactionState::Finished {
             return Err(Error::InvalidState(None));
         }
 
@@ -295,18 +283,13 @@ impl IDBTransactionMethods<crate::DomTypeHolder> for IDBTransaction {
     fn Commit(&self) -> Fallible<()> {
         // Step 1
         let (sender, receiver) = ipc::channel(self.global().time_profiler_chan().clone()).unwrap();
-        let start_operation = SyncOperation::Commit(
-            sender,
-            self.global().origin().immutable().clone(),
-            self.db.get_name().to_string(),
-            self.serial_number,
-        );
+        let commit_operation = KvsOperation::Commit(sender);
 
-        self.get_idb_thread()
-            .send(IndexedDBThreadMsg::Sync(start_operation))
-            .unwrap();
+        self.sender.send(commit_operation).unwrap();
 
-        let result = receiver.recv().unwrap();
+        let Ok(result) = receiver.recv() else {
+            return Ok(());
+        };
 
         // Step 2
         if let Err(_result) = result {
@@ -331,11 +314,13 @@ impl IDBTransactionMethods<crate::DomTypeHolder> for IDBTransaction {
         // FIXME:(rasviitanen)
         // This only sets the flags, and does not abort the transaction
         // see https://www.w3.org/TR/IndexedDB-2/#abort-a-transaction
-        if self.finished.get() {
+        if *self.sender.state.lock().unwrap() == TransactionState::Finished {
             return Err(Error::InvalidState(None));
         }
 
-        self.active.set(false);
+        *self.sender.state.lock().unwrap() = TransactionState::Aborted;
+        let abort_operation = KvsOperation::Abort;
+        self.sender.send(abort_operation).unwrap();
 
         Ok(())
     }
