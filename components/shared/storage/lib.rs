@@ -9,26 +9,41 @@ use malloc_size_of::malloc_size_of_is_0;
 use serde::{Deserialize, Serialize};
 
 use crate::indexeddb_thread::IndexedDBThreadMsg;
+use crate::storage_manager_thread::StorageManagerThreadMsg;
 use crate::webstorage_thread::WebStorageThreadMsg;
 
 pub mod indexeddb_thread;
+pub mod storage_manager_thread;
 pub mod webstorage_thread;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StorageThreads {
+    storage_manager_thread: IpcSender<StorageManagerThreadMsg>,
     storage_thread: GenericSender<WebStorageThreadMsg>,
     idb_thread: IpcSender<IndexedDBThreadMsg>,
 }
 
 impl StorageThreads {
     pub fn new(
+        storage_manager_thread: IpcSender<StorageManagerThreadMsg>,
         storage_thread: GenericSender<WebStorageThreadMsg>,
         idb_thread: IpcSender<IndexedDBThreadMsg>,
     ) -> StorageThreads {
         StorageThreads {
+            storage_manager_thread,
             storage_thread,
             idb_thread,
         }
+    }
+}
+
+impl IpcSend<StorageManagerThreadMsg> for StorageThreads {
+    fn send(&self, msg: StorageManagerThreadMsg) -> IpcSendResult {
+        self.storage_manager_thread.send(msg).map_err(IpcError::Bincode)
+    }
+
+    fn sender(&self) -> IpcSender<StorageManagerThreadMsg> {
+        self.storage_manager_thread.clone()
     }
 }
 

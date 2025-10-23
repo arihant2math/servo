@@ -5,8 +5,10 @@
 mod indexeddb;
 pub(crate) mod shared;
 mod storage_thread;
+mod storage_manager;
 mod webstorage;
 
 pub(crate) use indexeddb::IndexedDBThreadFactory;
+pub(crate) use storage_manager::StorageManagerThreadFactory;
 pub use storage_thread::new_storage_threads;
 pub(crate) use webstorage::WebStorageThreadFactory;
