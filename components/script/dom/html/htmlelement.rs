@@ -28,6 +28,7 @@ use crate::dom::bindings::codegen::Bindings::ShadowRootBinding::ShadowRoot_Bindi
 use crate::dom::bindings::codegen::Bindings::WindowBinding::WindowMethods;
 use crate::dom::bindings::error::{Error, ErrorResult, Fallible};
 use crate::dom::bindings::inheritance::{Castable, ElementTypeId, HTMLElementTypeId, NodeTypeId};
+use crate::dom::bindings::reflector::DomGlobal;
 use crate::dom::bindings::root::{Dom, DomRoot, MutNullableDom};
 use crate::dom::bindings::str::DOMString;
 use crate::dom::characterdata::CharacterData;
@@ -64,6 +65,7 @@ pub(crate) struct HTMLElement {
     element: Element,
     style_decl: MutNullableDom<CSSStyleDeclaration>,
     dataset: MutNullableDom<DOMStringMap>,
+    access_key: Option<char>,
 }
 
 impl HTMLElement {
@@ -91,6 +93,7 @@ impl HTMLElement {
             ),
             style_decl: Default::default(),
             dataset: Default::default(),
+            access_key: Default::default()
         }
     }
 
@@ -626,6 +629,33 @@ impl HTMLElementMethods<crate::DomTypeHolder> for HTMLElement {
     fn IsContentEditable(&self) -> bool {
         // TODO: https://github.com/servo/servo/issues/12776
         false
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/interaction.html#the-accesskey-attribute>
+    fn AccessKey(&self) -> DOMString {
+        let element = self.as_element();
+        element.get_string_attribute(&local_name!("accesskey"))
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/interaction.html#the-accesskey-attribute>
+    fn SetAccessKey(&self, value: DOMString) {
+        let element = self.as_element();
+        // https://html.spec.whatwg.org/multipage/interaction.html#keyboard-shortcuts-processing-model
+        for item in value.to_string().split(" ") {
+            if item.len() != 1 {
+                continue;
+            }
+            let Some(ch) = item.chars().next() else {
+                continue;
+            };
+            if !ch.is_ascii_alphanumeric() {
+                continue;
+            }
+            if self.global().as_window().set_accesskey(ch) {
+                break;
+            }
+        }
+        element.set_string_attribute(&local_name!("accesskey"), value, CanGc::note())
     }
 
     /// <https://html.spec.whatwg.org/multipage#dom-attachinternals>

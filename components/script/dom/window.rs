@@ -292,6 +292,10 @@ pub(crate) struct Window {
     status: DomRefCell<DOMString>,
     trusted_types: MutNullableDom<TrustedTypePolicyFactory>,
 
+    /// Accesskeys registered in this window.
+    #[no_trace]
+    accesskeys: DomRefCell<FxHashMap<char, Dom<Element>>>,
+
     /// The start of something resembling
     /// <https://html.spec.whatwg.org/multipage/#ongoing-navigation>
     ongoing_navigation: Cell<OngoingNavigation>,
@@ -843,6 +847,19 @@ impl Window {
 
         // Step 5: Return false.
         false
+    }
+
+    pub(crate) fn set_accesskey(&self, key: char, element: Dom<Element>) -> bool {
+        if self.accesskeys.contains(&key) {
+            false
+        } else {
+            self.accesskeys.borrow_mut().insert(key, element);
+            true
+        }
+    }
+
+    pub(crate) fn clear_accesskeys(&self, key: char, element: Dom<Element>) {
+        self.accesskeys.borrow_mut().retain(|_, e| !Dom::ptr_eq(e, &element));
     }
 }
 
