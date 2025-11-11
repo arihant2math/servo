@@ -13,6 +13,8 @@ use std::thread;
 use base::generic_channel::{self, GenericReceiver, GenericSender};
 use base::id::WebViewId;
 use base::threadpool::ThreadPool;
+use crossbeam_channel::Sender;
+use devtools_traits::DevtoolsControlMsg;
 use malloc_size_of::MallocSizeOf;
 use malloc_size_of_derive::MallocSizeOf;
 use profile_traits::mem::{
@@ -31,13 +33,14 @@ use crate::webstorage::engines::sqlite::SqliteEngine;
 const QUOTA_SIZE_LIMIT: usize = 5 * 1024 * 1024;
 
 pub trait WebStorageThreadFactory {
-    fn new(config_dir: Option<PathBuf>, mem_profiler_chan: MemProfilerChan) -> Self;
+    fn new(config_dir: Option<PathBuf>, devtools_sender: Option<Sender<DevtoolsControlMsg>>, mem_profiler_chan: MemProfilerChan) -> Self;
 }
 
 impl WebStorageThreadFactory for GenericSender<WebStorageThreadMsg> {
     /// Create a storage thread
     fn new(
         config_dir: Option<PathBuf>,
+        devtools_sender: Option<Sender<DevtoolsControlMsg>>,
         mem_profiler_chan: MemProfilerChan,
     ) -> GenericSender<WebStorageThreadMsg> {
         let (chan, port) = generic_channel::channel().unwrap();
@@ -46,7 +49,7 @@ impl WebStorageThreadFactory for GenericSender<WebStorageThreadMsg> {
             .name("WebStorageManager".to_owned())
             .spawn(move || {
                 mem_profiler_chan.run_with_memory_reporting(
-                    || WebStorageManager::new(port, config_dir).start(),
+                    || WebStorageManager::new(devtools_sender, port, config_dir).start(),
                     String::from("storage-reporter"),
                     chan2,
                     WebStorageThreadMsg::CollectMemoryReport,
@@ -136,6 +139,7 @@ impl<E: WebStorageEngine> Drop for WebStorageEnvironment<E> {
 }
 
 struct WebStorageManager {
+    devtools_sender: Option<Sender<DevtoolsControlMsg>>,
     port: GenericReceiver<WebStorageThreadMsg>,
     session_data: FxHashMap<WebViewId, FxHashMap<ImmutableOrigin, OriginEntry>>,
     config_dir: Option<PathBuf>,
@@ -145,6 +149,7 @@ struct WebStorageManager {
 
 impl WebStorageManager {
     fn new(
+        devtools_sender: Option<Sender<DevtoolsControlMsg>>,
         port: GenericReceiver<WebStorageThreadMsg>,
         config_dir: Option<PathBuf>,
     ) -> WebStorageManager {
@@ -156,6 +161,7 @@ impl WebStorageManager {
             .unwrap_or(pref!(threadpools_fallback_worker_num) as usize)
             .min(pref!(threadpools_webstorage_workers_max).max(1) as usize);
         WebStorageManager {
+            devtools_sender,
             port,
             session_data: FxHashMap::default(),
             config_dir,

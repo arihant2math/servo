@@ -5,6 +5,8 @@
 use std::path::PathBuf;
 
 use base::generic_channel::GenericSender;
+use crossbeam_channel::Sender;
+use devtools_traits::DevtoolsControlMsg;
 use ipc_channel::ipc::IpcSender;
 use profile_traits::mem::ProfilerChan as MemProfilerChan;
 use storage_traits::StorageThreads;
@@ -15,12 +17,13 @@ use crate::{IndexedDBThreadFactory, WebStorageThreadFactory};
 
 #[allow(clippy::too_many_arguments)]
 pub fn new_storage_threads(
+    devtools_sender: Option<Sender<DevtoolsControlMsg>>,
     mem_profiler_chan: MemProfilerChan,
     config_dir: Option<PathBuf>,
 ) -> (StorageThreads, StorageThreads) {
     let idb: IpcSender<IndexedDBThreadMsg> = IndexedDBThreadFactory::new(config_dir.clone());
     let web_storage: GenericSender<WebStorageThreadMsg> =
-        WebStorageThreadFactory::new(config_dir, mem_profiler_chan);
+        WebStorageThreadFactory::new(config_dir, devtools_sender, mem_profiler_chan);
     (
         StorageThreads::new(web_storage.clone(), idb.clone()),
         StorageThreads::new(web_storage, idb),

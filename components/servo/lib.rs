@@ -989,7 +989,7 @@ fn create_constellation(
     );
 
     let (private_storage_threads, public_storage_threads) =
-        new_storage_threads(mem_profiler_chan.clone(), config_dir);
+        new_storage_threads(devtools_sender.clone(), mem_profiler_chan.clone(), config_dir);
 
     let system_font_service = Arc::new(
         SystemFontService::spawn(
