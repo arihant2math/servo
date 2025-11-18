@@ -228,6 +228,8 @@ pub(crate) mod bluetooth;
 pub(crate) use self::bluetooth::*;
 pub(crate) mod broadcastchannel;
 pub(crate) mod bytelengthqueuingstrategy;
+pub(crate) mod cache;
+pub(crate) use self::cache::*;
 mod canvas;
 pub(crate) use self::canvas::*;
 pub(crate) mod cdatasection;

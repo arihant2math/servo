@@ -8,9 +8,11 @@ use ipc_channel::ipc::{IpcError, IpcSender};
 use malloc_size_of::malloc_size_of_is_0;
 use serde::{Deserialize, Serialize};
 
+use crate::cache_thread::CacheThreadMsg;
 use crate::indexeddb_thread::IndexedDBThreadMsg;
 use crate::webstorage_thread::WebStorageThreadMsg;
 
+pub mod cache_thread;
 pub mod indexeddb_thread;
 pub mod webstorage_thread;
 
@@ -18,16 +20,19 @@ pub mod webstorage_thread;
 pub struct StorageThreads {
     web_storage_thread: GenericSender<WebStorageThreadMsg>,
     idb_thread: IpcSender<IndexedDBThreadMsg>,
+    cache_thread: GenericSender<CacheThreadMsg>,
 }
 
 impl StorageThreads {
     pub fn new(
         web_storage_thread: GenericSender<WebStorageThreadMsg>,
         idb_thread: IpcSender<IndexedDBThreadMsg>,
+        cache_thread: GenericSender<CacheThreadMsg>,
     ) -> StorageThreads {
         StorageThreads {
             web_storage_thread,
             idb_thread,
+            cache_thread,
         }
     }
 }
@@ -49,6 +54,16 @@ impl GenericSend<WebStorageThreadMsg> for StorageThreads {
 
     fn sender(&self) -> GenericSender<WebStorageThreadMsg> {
         self.web_storage_thread.clone()
+    }
+}
+
+impl GenericSend<CacheThreadMsg> for StorageThreads {
+    fn send(&self, msg: CacheThreadMsg) -> SendResult {
+        self.cache_thread.send(msg)
+    }
+
+    fn sender(&self) -> GenericSender<CacheThreadMsg> {
+        self.cache_thread.clone()
     }
 }
 

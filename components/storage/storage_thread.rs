@@ -11,7 +11,7 @@ use storage_traits::StorageThreads;
 use storage_traits::indexeddb_thread::IndexedDBThreadMsg;
 use storage_traits::webstorage_thread::WebStorageThreadMsg;
 
-use crate::{IndexedDBThreadFactory, WebStorageThreadFactory};
+use crate::{CacheThreadFactory, IndexedDBThreadFactory, WebStorageThreadFactory};
 
 #[allow(clippy::too_many_arguments)]
 pub fn new_storage_threads(
@@ -20,9 +20,10 @@ pub fn new_storage_threads(
 ) -> (StorageThreads, StorageThreads) {
     let idb: IpcSender<IndexedDBThreadMsg> = IndexedDBThreadFactory::new(config_dir.clone());
     let web_storage: GenericSender<WebStorageThreadMsg> =
-        WebStorageThreadFactory::new(config_dir, mem_profiler_chan);
+        WebStorageThreadFactory::new(config_dir.clone(), mem_profiler_chan);
+    let cache = CacheThreadFactory::new(config_dir);
     (
-        StorageThreads::new(web_storage.clone(), idb.clone()),
-        StorageThreads::new(web_storage, idb),
+        StorageThreads::new(web_storage.clone(), idb.clone(), cache.clone()),
+        StorageThreads::new(web_storage, idb, cache),
     )
 }

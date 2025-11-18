@@ -4510,7 +4510,7 @@ class CGMethodPromiseWrapper(CGAbstractExternMethod):
             }
             return exception_to_promise(cx, (*args).rval(), CanGc::note());
             """,
-            methodName=self.method.identifier.name,
+            methodName=CGDictionary.makeMemberName(self.method.identifier.name),
             args=", ".join(arg.name for arg in self.args),
         ))
 

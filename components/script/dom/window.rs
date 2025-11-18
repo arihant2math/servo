@@ -191,6 +191,7 @@ use crate::timers::{IsInterval, TimerCallback};
 use crate::unminify::unminified_path;
 use crate::webdriver_handlers::{find_node_by_unique_id_in_document, jsval_to_webdriver};
 use crate::{fetch, window_named_properties};
+use crate::dom::cachestorage::CacheStorage;
 
 /// A callback to call when a response comes back from the `ImageCache`.
 ///
@@ -289,6 +290,7 @@ pub(crate) struct Window {
     screen: MutNullableDom<Screen>,
     session_storage: MutNullableDom<Storage>,
     local_storage: MutNullableDom<Storage>,
+    caches: MutNullableDom<CacheStorage>,
     status: DomRefCell<DOMString>,
     trusted_types: MutNullableDom<TrustedTypePolicyFactory>,
 
@@ -986,6 +988,12 @@ impl WindowMethods<crate::DomTypeHolder> for Window {
 
         // Step 7: Invoke WebDriver BiDi user prompt closed with this, "alert", and true.
         // TODO: Implement support for WebDriver BiDi.
+    }
+
+    /// <https://www.w3.org/TR/service-workers/#global-caches-attribute>
+    fn Caches(&self) -> DomRoot<CacheStorage> {
+        self.caches
+            .or_init(|| CacheStorage::new(self.as_global_scope(), CanGc::note()))
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-confirm>
@@ -3442,6 +3450,7 @@ impl Window {
             screen: Default::default(),
             session_storage: Default::default(),
             local_storage: Default::default(),
+            caches: Default::default(),
             status: DomRefCell::new(DOMString::new()),
             parent_info,
             dom_static: GlobalStaticData::new(),

@@ -37,7 +37,6 @@ use profile_traits::mem::{ProcessReports, perform_memory_report};
 use servo_url::{MutableOrigin, ServoUrl};
 use timers::TimerScheduler;
 use uuid::Uuid;
-
 use crate::dom::bindings::cell::{DomRefCell, Ref};
 use crate::dom::bindings::codegen::Bindings::ImageBitmapBinding::{
     ImageBitmapOptions, ImageBitmapSource,
@@ -60,6 +59,7 @@ use crate::dom::bindings::root::{DomRoot, MutNullableDom};
 use crate::dom::bindings::str::{DOMString, USVString};
 use crate::dom::bindings::trace::RootedTraceableBox;
 use crate::dom::bindings::utils::define_all_exposed_interfaces;
+use crate::dom::cachestorage::CacheStorage;
 use crate::dom::crypto::Crypto;
 use crate::dom::csp::{GlobalCspReporting, Violation, parse_csp_list_from_metadata};
 use crate::dom::dedicatedworkerglobalscope::{
@@ -304,6 +304,7 @@ pub(crate) struct WorkerGlobalScope {
     navigation_start: CrossProcessInstant,
     performance: MutNullableDom<Performance>,
     indexeddb: MutNullableDom<IDBFactory>,
+    caches: MutNullableDom<CacheStorage>,
     trusted_types: MutNullableDom<TrustedTypePolicyFactory>,
 
     /// A [`TimerScheduler`] used to schedule timers for this [`WorkerGlobalScope`].
@@ -382,6 +383,7 @@ impl WorkerGlobalScope {
             navigation_start: CrossProcessInstant::now(),
             performance: Default::default(),
             indexeddb: Default::default(),
+            caches: Default::default(),
             timer_scheduler: RefCell::default(),
             insecure_requests_policy,
             trusted_types: Default::default(),
@@ -632,6 +634,15 @@ impl WorkerGlobalScopeMethods<crate::DomTypeHolder> for WorkerGlobalScope {
             let global_scope = self.upcast::<GlobalScope>();
             IDBFactory::new(global_scope, CanGc::note())
         })
+    }
+
+    /// <https://www.w3.org/TR/service-workers/#global-caches-attribute>
+    fn Caches(&self) -> DomRoot<CacheStorage> {
+        self.caches
+            .or_init(|| {
+                let global_scope = self.upcast::<GlobalScope>();
+                CacheStorage::new(global_scope, CanGc::note())
+            })
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-workerglobalscope-location>
