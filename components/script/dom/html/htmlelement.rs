@@ -617,15 +617,61 @@ impl HTMLElementMethods<crate::DomTypeHolder> for HTMLElement {
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-contenteditable>
-    fn SetContentEditable(&self, _: DOMString) {
-        // TODO: https://github.com/servo/servo/issues/12776
-        warn!("The contentEditable attribute is not implemented yet");
+    fn SetContentEditable(&self, value: DOMString) {
+        let lower = value.to_ascii_lowercase();
+        let element = self.as_element();
+
+        match lower.as_ref() {
+            "inherit" => {
+                element.remove_attribute(&ns!(), &local_name!("contenteditable"), CanGc::note());
+            },
+            "true" => {
+                element.set_string_attribute(
+                    &local_name!("contenteditable"),
+                    DOMString::from("true"),
+                    CanGc::note(),
+                );
+            },
+            "false" => {
+                element.set_string_attribute(
+                    &local_name!("contenteditable"),
+                    DOMString::from("false"),
+                    CanGc::note(),
+                );
+            },
+            "plaintext-only" => {
+                element.set_string_attribute(
+                    &local_name!("contenteditable"),
+                    DOMString::from("plaintext-only"),
+                    CanGc::note(),
+                );
+            },
+            _ => {
+                // TODO: Return SyntaxError
+            },
+        }
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-contenteditable>
     fn IsContentEditable(&self) -> bool {
-        // TODO: https://github.com/servo/servo/issues/12776
-        false
+        // Evaluate the element’s own state first.
+        match self.ContentEditable().to_ascii_lowercase().as_ref() {
+            "true" | "plaintext-only" => true,
+            "false" => false,
+            // For the "inherit" (and missing attribute) case, defer to the parent element.
+            _ => {
+                if let Some(parent) = self.upcast::<Node>().GetParentElement() {
+                    if let Some(parent_html) = parent.downcast::<HTMLElement>() {
+                        parent_html.IsContentEditable()
+                    } else {
+                        false
+                    }
+                } else {
+                    // Root elements default to not editable.
+                    false
+                }
+            },
+        }
     }
 
     /// <https://html.spec.whatwg.org/multipage#dom-attachinternals>
