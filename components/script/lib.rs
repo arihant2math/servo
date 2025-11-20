@@ -30,6 +30,7 @@ pub(crate) mod clipboard_provider;
 pub(crate) mod conversions;
 mod devtools;
 pub(crate) mod document_loader;
+mod editor;
 #[macro_use]
 mod dom;
 pub(crate) use dom::canvas_context;

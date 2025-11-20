@@ -23,7 +23,9 @@ use js::jsapi::JSAutoRealm;
 use keyboard_types::{Code, Key, KeyState, Modifiers, NamedKey};
 use layout_api::{ScrollContainerQueryFlags, node_id_from_scroll_id};
 use script_bindings::codegen::GenericBindings::DocumentBinding::DocumentMethods;
+use script_bindings::codegen::GenericBindings::ElementBinding::ElementMethods;
 use script_bindings::codegen::GenericBindings::EventBinding::EventMethods;
+use script_bindings::codegen::GenericBindings::HTMLElementBinding::HTMLElementMethods;
 use script_bindings::codegen::GenericBindings::NavigatorBinding::NavigatorMethods;
 use script_bindings::codegen::GenericBindings::NodeBinding::NodeMethods;
 use script_bindings::codegen::GenericBindings::PerformanceBinding::PerformanceMethods;
@@ -40,7 +42,9 @@ use script_traits::ConstellationInputEvent;
 use servo_config::pref;
 use style_traits::CSSPixel;
 
+use crate::clipboard_provider::EmbedderClipboardProvider;
 use crate::dom::bindings::cell::DomRefCell;
+use crate::dom::bindings::codegen::UnionTypes::TrustedHTMLOrNullIsEmptyString;
 use crate::dom::bindings::refcounted::Trusted;
 use crate::dom::bindings::root::MutNullableDom;
 use crate::dom::clipboardevent::ClipboardEventType;
@@ -48,8 +52,9 @@ use crate::dom::document::{FireMouseEventType, FocusInitiator};
 use crate::dom::event::{EventBubbles, EventCancelable, EventComposed, EventFlags};
 use crate::dom::gamepad::gamepad::{Gamepad, contains_user_gesture};
 use crate::dom::gamepad::gamepadevent::GamepadEventType;
+use crate::dom::htmlelement::HTMLElement;
 use crate::dom::inputevent::HitTestResult;
-use crate::dom::node::{self, Node, NodeTraits, ShadowIncluding};
+use crate::dom::node::{self, Node, NodeDamage, NodeTraits, ShadowIncluding};
 use crate::dom::pointerevent::PointerId;
 use crate::dom::scrolling_box::ScrollingBoxAxis;
 use crate::dom::types::{
@@ -58,7 +63,9 @@ use crate::dom::types::{
     WheelEvent, Window,
 };
 use crate::drag_data_store::{DragDataStore, Kind, Mode};
+use crate::editor::{Editor, EditorMutation};
 use crate::realms::enter_realm;
+use crate::textinput::UTF8Bytes;
 
 /// The [`DocumentEventHandler`] is a structure responsible for handling input events for
 /// the [`crate::Document`] and storing data related to event handling. It exists to
@@ -96,6 +103,10 @@ pub(crate) struct DocumentEventHandler {
     /// The active keyboard modifiers for the WebView. This is updated when receiving any input event.
     #[no_trace]
     active_keyboard_modifiers: Cell<Modifiers>,
+
+    #[no_trace]
+    #[ignore_malloc_size_of = "Editor is not traceable"]
+    pub(crate) active_editor: DomRefCell<Option<Editor>>,
 }
 
 impl DocumentEventHandler {
@@ -112,6 +123,7 @@ impl DocumentEventHandler {
             current_cursor: Default::default(),
             active_touch_points: Default::default(),
             active_keyboard_modifiers: Default::default(),
+            active_editor: Default::default(),
         }
     }
 
@@ -1050,6 +1062,34 @@ impl DocumentEventHandler {
             }
         }
 
+        // Plain-text `contenteditable` handling
+        if let Some(el) = target.downcast::<HTMLElement>() {
+            if el.IsContentEditable() {
+                // lazily create the editor
+                if self.active_editor.borrow().is_none() {
+                    let clipboard = EmbedderClipboardProvider {
+                        embedder_sender: self
+                            .window
+                            .as_global_scope()
+                            .script_to_embedder_chan()
+                            .clone(),
+                        webview_id: self.window.webview_id(),
+                    };
+                    *self.active_editor.borrow_mut() = Some(Editor::new(clipboard));
+                }
+                if let Some(editor) = self.active_editor.borrow_mut().as_mut() {
+                    let (consumed, mutation) = editor.handle_keydown(event, &keyevent);
+                    if let Some(m) = mutation {
+                        self.apply_editor_mutation(el, m, can_gc);
+                    }
+                    if consumed {
+                        event.PreventDefault();
+                        return EventFlags::Canceled.into();
+                    }
+                }
+            }
+        }
+
         flags.into()
     }
 
@@ -1459,6 +1499,37 @@ impl DocumentEventHandler {
     }
 
     /// <https://www.w3.org/TR/clipboard-apis/#write-content-to-the-clipboard>
+    fn apply_editor_mutation(
+        &self,
+        element: &HTMLElement,
+        mutation: EditorMutation,
+        can_gc: CanGc,
+    ) {
+        match mutation {
+            EditorMutation::Input { .. } => {
+                if let Some(editor) = self.active_editor.borrow().as_ref() {
+                    element.SetInnerText(DOMString::from(editor.text_content()), can_gc);
+                }
+                element.upcast::<Node>().dirty(NodeDamage::Other);
+            },
+            EditorMutation::RedrawSelection => {
+                element.upcast::<Node>().dirty(NodeDamage::Other);
+            },
+        }
+    }
+
+    /// Return the current selection / caret byte-offset range (UTF-8) of the
+    /// active plain-text `contenteditable` editor, if any.
+    ///
+    /// Layout calls this while building display lists, allowing it to paint
+    /// the caret and selection highlight for phase-1 `contenteditable`.
+    pub(crate) fn selection_range_for_layout(&self) -> Option<std::ops::Range<UTF8Bytes>> {
+        self.active_editor
+            .borrow()
+            .as_ref()
+            .map(|editor| editor.sorted_selection_offsets_range())
+    }
+
     fn write_content_to_the_clipboard(&self, drag_data_store: &DragDataStore) {
         // Step 1
         if drag_data_store.list_len() > 0 {

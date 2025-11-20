@@ -3575,6 +3575,22 @@ impl Document {
         &self.event_handler
     }
 
+    /// Return the byte range (in UTF-8) of the current selection / caret inside
+    /// the active plain-text `contenteditable` editor, if any.
+    ///
+    /// Layout uses this information to paint the caret / selection highlight
+    /// during phase-1 `contenteditable` support.
+    pub(crate) fn active_editor_selection_range(&self) -> Option<std::ops::Range<usize>> {
+        self.event_handler
+            .active_editor
+            .borrow()
+            .as_ref()
+            .map(|editor| {
+                use crate::textinput::UTF8Bytes;
+                UTF8Bytes::unwrap_range(editor.sorted_selection_offsets_range())
+            })
+    }
+
     /// Get the [`Document`]'s [`DocumentEmbedderControls`].
     pub(crate) fn embedder_controls(&self) -> &DocumentEmbedderControls {
         &self.embedder_controls

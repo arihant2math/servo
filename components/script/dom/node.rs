@@ -129,6 +129,7 @@ use crate::dom::virtualmethods::{VirtualMethods, vtable_for};
 use crate::dom::window::Window;
 use crate::script_runtime::CanGc;
 use crate::script_thread::ScriptThread;
+use crate::textinput::UTF8Bytes;
 
 //
 // The basic Node structure
@@ -1949,6 +1950,7 @@ impl<'dom> LayoutNodeHelpers<'dom> for LayoutDom<'dom, Node> {
         panic!("not text!")
     }
 
+    #[expect(unsafe_code)]
     fn selection(self) -> Option<Range<usize>> {
         // If this is a inner editor of an UA widget element, we should find
         // the selection from its shadow host.
@@ -1974,6 +1976,32 @@ impl<'dom> LayoutNodeHelpers<'dom> for LayoutDom<'dom, Node> {
 
         if let Some(input) = self.downcast::<HTMLInputElement>() {
             return input.selection_for_layout();
+        }
+
+        // ────────────────────────────────────────────────────────────────────────
+        // Plain-text `contenteditable`
+        // ────────────────────────────────────────────────────────────────────────
+        //
+        // Phase-1 contenteditable hosts consist of a single text node mirroring
+        // the element’s innerText. When such an element is focused we retrieve
+        // the live selection range from the active `Editor` owned by the
+        // document’s `DocumentEventHandler` so that layout can paint the caret /
+        // selection highlight.
+        if self.is_text_node_for_layout() {
+            if let Some(parent) = self.parent_node_ref() {
+                if let Some(host) = parent.downcast::<HTMLElement>() {
+                    if host.upcast::<Element>().focus_state() {
+                        // SAFETY: we’re on the layout traversal, so `borrow_for_layout`
+                        // is appropriate here.
+                        let doc = self.owner_doc_for_layout();
+                        if let Some(range) =
+                            unsafe { doc.unsafe_get().active_editor_selection_range() }
+                        {
+                            return Some(range);
+                        }
+                    }
+                }
+            }
         }
 
         None

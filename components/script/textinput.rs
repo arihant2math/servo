@@ -208,7 +208,7 @@ pub struct TextInput<T: ClipboardProvider> {
     was_last_change_by_set_content: bool,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum IsComposing {
     Composing,
     NotComposing,
@@ -224,7 +224,7 @@ impl From<IsComposing> for bool {
 }
 
 /// <https://www.w3.org/TR/input-events-2/#interface-InputEvent-Attributes>
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum InputType {
     InsertText,
     InsertLineBreak,
