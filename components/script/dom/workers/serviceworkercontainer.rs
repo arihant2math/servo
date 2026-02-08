@@ -196,7 +196,7 @@ impl ServiceWorkerContainerMethods<crate::DomTypeHolder> for ServiceWorkerContai
             Ok(key) => key,
             Err(()) => {
                 let promise = Promise::new(&global, CanGc::note());
-                promise.reject_error(Error::InvalidAccess, CanGc::note());
+                promise.reject_error(Error::InvalidAccess(None), CanGc::note());
                 return promise;
             },
         };
@@ -215,7 +215,7 @@ impl ServiceWorkerContainerMethods<crate::DomTypeHolder> for ServiceWorkerContai
         // Step 6. If the origin of clientURL is not client’s origin, return a promise rejected with a "SecurityError" DOMException.
         if client_url.origin() != self.client.creation_url().origin() {
             let promise = Promise::new(&global, CanGc::note());
-            promise.reject_error(Error::Security, CanGc::note());
+            promise.reject_error(Error::Security(None), CanGc::note());
             return promise;
         }
         // Step 7. Let promise be a new promise.
@@ -287,7 +287,7 @@ impl ServiceWorkerContainerMethods<crate::DomTypeHolder> for ServiceWorkerContai
             Ok(key) => key,
             Err(()) => {
                 let promise = Promise::new(&global, CanGc::note());
-                promise.reject_error(Error::InvalidAccess, CanGc::note());
+                promise.reject_error(Error::InvalidAccess(None), CanGc::note());
                 return promise;
             },
         };
