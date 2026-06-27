@@ -8,11 +8,11 @@ use js::context::{JSContext, NoGC};
 use script_bindings::reflector::{Reflector, reflect_dom_object_with_cx};
 
 use crate::dom::bindings::codegen::Bindings::DOMStringMapBinding::DOMStringMapMethods;
+use crate::dom::bindings::domname::is_valid_attribute_local_name;
 use crate::dom::bindings::error::{Error, ErrorResult};
 use crate::dom::bindings::inheritance::Castable;
 use crate::dom::bindings::root::{Dom, DomRoot};
 use crate::dom::bindings::str::DOMString;
-use crate::dom::bindings::xmlname::matches_name_production;
 use crate::dom::element::Element;
 use crate::dom::html::htmlelement::HTMLElement;
 use crate::dom::node::NodeTraits;
@@ -159,7 +159,7 @@ impl DOMStringMapMethods<crate::DomTypeHolder> for DOMStringMap {
             return Err(Error::Syntax(None));
         };
         // Step 4. If name is not a valid attribute local name, then throw an "InvalidCharacterError" DOMException.
-        if !matches_name_production(&name) {
+        if !is_valid_attribute_local_name(&name) {
             return Err(Error::InvalidCharacter(None));
         }
         // Step 5. Set an attribute value for the DOMStringMap's associated element using name and value.
