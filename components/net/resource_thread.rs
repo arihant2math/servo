@@ -40,7 +40,6 @@ use profile_traits::time::ProfilerChan;
 use rustc_hash::FxHashMap;
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
-use serde::{Deserialize, Serialize};
 use servo_base::generic_channel::{
     self, CallbackSetter, GenericCallback, GenericReceiver, GenericReceiverSet,
     GenericSelectionResult,
@@ -54,7 +53,6 @@ use crate::connector::{
     CACertificates, CertificateErrorOverrideManager, create_http_client, create_tls_config,
 };
 use crate::cookie::ServoCookie;
-use crate::cookie_storage::CookieStorage;
 use crate::embedder::NetToEmbedderMsg;
 use crate::fetch::cors_cache::CorsCache;
 use crate::fetch::fetch_params::{FetchParams, SharedPreloadedResources};
@@ -64,9 +62,10 @@ use crate::fetch::methods::{
     transfers_request_body_stream_to_later_manual_redirect,
 };
 use crate::filemanager_thread::FileManager;
-use crate::hsts::{self, HstsList};
+use crate::hsts;
 use crate::http_cache::HttpCache;
 use crate::http_loader::{HttpState, http_redirect_fetch};
+use crate::http_state::create_http_state_stores;
 use crate::protocols::ProtocolRegistry;
 use crate::request_interceptor::RequestInterceptor;
 use crate::websocket_loader::create_handshake_request;
@@ -204,20 +203,14 @@ fn create_http_states(
     ignore_certificate_errors: bool,
     embedder_proxy: GenericEmbedderProxy<NetToEmbedderMsg>,
 ) -> (Arc<HttpState>, Arc<HttpState>) {
-    let mut hsts_list = HstsList::default();
-    let mut auth_cache = AuthCache::default();
-    let mut cookie_jar = CookieStorage::new(150);
-    if let Some(config_dir) = config_dir {
-        servo_base::read_json_from_file(&mut auth_cache, config_dir, "auth_cache.json");
-        servo_base::read_json_from_file(&mut hsts_list, config_dir, "hsts_list.json");
-        servo_base::read_json_from_file(&mut cookie_jar, config_dir, "cookie_jar.json");
-    }
+    let public_stores = create_http_state_stores(config_dir);
+    let private_stores = create_http_state_stores(None);
 
     let override_manager = CertificateErrorOverrideManager::new();
     let http_state = HttpState {
-        hsts_list: RwLock::new(hsts_list),
-        cookie_jar: RwLock::new(cookie_jar),
-        auth_cache: RwLock::new(auth_cache),
+        hsts_list: public_stores.hsts_list,
+        cookie_jar: public_stores.cookie_jar,
+        auth_cache: public_stores.auth_cache,
         history_states: RwLock::new(FxHashMap::default()),
         http_cache: HttpCache::default(),
         client: create_http_client(create_tls_config(
@@ -231,9 +224,9 @@ fn create_http_states(
 
     let override_manager = CertificateErrorOverrideManager::new();
     let private_http_state = HttpState {
-        hsts_list: RwLock::new(HstsList::default()),
-        cookie_jar: RwLock::new(CookieStorage::new(150)),
-        auth_cache: RwLock::new(AuthCache::default()),
+        hsts_list: private_stores.hsts_list,
+        cookie_jar: private_stores.cookie_jar,
+        auth_cache: private_stores.auth_cache,
         history_states: RwLock::new(FxHashMap::default()),
         http_cache: HttpCache::default(),
         client: create_http_client(create_tls_config(
@@ -454,21 +447,15 @@ impl ResourceChannelManager {
                 }
             },
             CoreResourceMsg::DeleteCookiesForSites(sites, sender) => {
-                http_state
-                    .cookie_jar
-                    .write()
-                    .delete_cookies_for_sites(&sites);
+                http_state.cookie_jar.delete_cookies_for_sites(&sites);
                 let _ = sender.send(());
             },
             CoreResourceMsg::DeleteSessionCookies(sender) => {
-                http_state.cookie_jar.write().clear_session_cookies();
+                http_state.cookie_jar.clear_session_cookies();
                 let _ = sender.send(());
             },
             CoreResourceMsg::DeleteCookies(request, sender) => {
-                http_state
-                    .cookie_jar
-                    .write()
-                    .clear_storage(request.as_ref());
+                http_state.cookie_jar.clear_storage(request.as_ref());
                 if let Some(sender) = sender {
                     let _ = sender.send(());
                 }
@@ -477,15 +464,11 @@ impl ResourceChannelManager {
             CoreResourceMsg::DeleteCookie(request, name) => {
                 http_state
                     .cookie_jar
-                    .write()
                     .delete_cookie_with_name(&request, name);
                 return true;
             },
             CoreResourceMsg::DeleteCookieAsync(cookie_store_id, url, name) => {
-                http_state
-                    .cookie_jar
-                    .write()
-                    .delete_cookie_with_name(&url, name);
+                http_state.cookie_jar.delete_cookie_with_name(&url, name);
                 self.send_cookie_response(cookie_store_id, CookieData::Delete(Ok(())));
             },
             CoreResourceMsg::FetchRedirect(request_builder, res_init, sender) => {
@@ -531,23 +514,20 @@ impl ResourceChannelManager {
                 self.send_cookie_response(cookie_store_id, CookieData::Set(Ok(())));
             },
             CoreResourceMsg::GetCookieStringForUrl(url, consumer, source) => {
-                let mut cookie_jar = http_state.cookie_jar.write();
-                cookie_jar.remove_expired_cookies_for_url(&url);
-                consumer.send_or_ignore(cookie_jar.cookies_for_url(&url, source));
+                consumer.send_or_ignore(http_state.cookie_jar.cookies_for_url(&url, source));
             },
             CoreResourceMsg::GetCookiesForUrl(url, consumer, source) => {
-                let mut cookie_jar = http_state.cookie_jar.write();
-                cookie_jar.remove_expired_cookies_for_url(&url);
-                let cookies = cookie_jar
+                let cookies = http_state
+                    .cookie_jar
                     .cookies_data_for_url(&url, source)
+                    .into_iter()
                     .map(Serde)
                     .collect();
                 consumer.send_or_ignore(cookies);
             },
             CoreResourceMsg::GetCookieDataForUrlAsync(cookie_store_id, url, name) => {
-                let mut cookie_jar = http_state.cookie_jar.write();
-                cookie_jar.remove_expired_cookies_for_url(&url);
-                let cookie = cookie_jar
+                let cookie = http_state
+                    .cookie_jar
                     .query_cookies(&url, name)
                     .into_iter()
                     .map(Serde)
@@ -555,9 +535,8 @@ impl ResourceChannelManager {
                 self.send_cookie_response(cookie_store_id, CookieData::Get(cookie));
             },
             CoreResourceMsg::GetAllCookieDataForUrlAsync(cookie_store_id, url, name) => {
-                let mut cookie_jar = http_state.cookie_jar.write();
-                cookie_jar.remove_expired_cookies_for_url(&url);
-                let cookies = cookie_jar
+                let cookies = http_state
+                    .cookie_jar
                     .query_cookies(&url, name)
                     .into_iter()
                     .map(Serde)
@@ -565,10 +544,8 @@ impl ResourceChannelManager {
                 self.send_cookie_response(cookie_store_id, CookieData::GetAll(cookies));
             },
             CoreResourceMsg::EmbedderGetCookiesForUrl(operation_id, url, source) => {
-                let mut cookie_jar = http_state.cookie_jar.write();
-                cookie_jar.remove_expired_cookies_for_url(&url);
                 let cookies: Vec<Cookie<'static>> =
-                    cookie_jar.cookies_data_for_url(&url, source).collect();
+                    http_state.cookie_jar.cookies_data_for_url(&url, source);
                 http_state.embedder_proxy.send(
                     NetToEmbedderMsg::EmbedderCookieOperationResponseWithCookies(
                         operation_id,
@@ -590,7 +567,7 @@ impl ResourceChannelManager {
                     ));
             },
             CoreResourceMsg::EmbedderClearCookies(operation_id) => {
-                http_state.cookie_jar.write().clear_storage(None);
+                http_state.cookie_jar.clear_storage(None);
                 http_state
                     .embedder_proxy
                     .send(NetToEmbedderMsg::EmbedderCookieOperationResponse(
@@ -598,7 +575,7 @@ impl ResourceChannelManager {
                     ));
             },
             CoreResourceMsg::EmbedderClearSessionCookies(operation_id) => {
-                http_state.cookie_jar.write().clear_session_cookies();
+                http_state.cookie_jar.clear_session_cookies();
                 http_state
                     .embedder_proxy
                     .send(NetToEmbedderMsg::EmbedderCookieOperationResponse(
@@ -618,9 +595,8 @@ impl ResourceChannelManager {
                     .insert(origin, mediator_chan);
             },
             CoreResourceMsg::ListCookies(sender) => {
-                let mut cookie_jar = http_state.cookie_jar.write();
-                cookie_jar.remove_all_expired_cookies();
-                sender.send_or_ignore(cookie_jar.cookie_site_descriptors());
+                http_state.cookie_jar.remove_all_expired_cookies();
+                sender.send_or_ignore(http_state.cookie_jar.cookie_site_descriptors());
             },
             CoreResourceMsg::GetHistoryState(history_state_id, consumer) => {
                 let history_states = http_state.history_states.read();
@@ -665,47 +641,20 @@ impl ResourceChannelManager {
                 sender.send_or_ignore(total);
             },
             CoreResourceMsg::Exit(sender) => {
-                if let Some(ref config_dir) = self.config_dir {
-                    let auth_cache = http_state.auth_cache.read();
-                    servo_base::write_json_to_file(&*auth_cache, config_dir, "auth_cache.json");
-                    let jar = http_state.cookie_jar.read();
-                    servo_base::write_json_to_file(&*jar, config_dir, "cookie_jar.json");
-                    let hsts = http_state.hsts_list.read();
-                    servo_base::write_json_to_file(&*hsts, config_dir, "hsts_list.json");
-                }
                 self.resource_manager.exit();
                 let _ = sender.send(());
                 return false;
             },
             // Ignore these messages as they are only sent on very specific channels.
-            CoreResourceMsg::CollectMemoryReport(_) |
-            CoreResourceMsg::RevokeTokenForFile(..) |
-            CoreResourceMsg::RefreshTokenForFile(..) => {},
+            CoreResourceMsg::CollectMemoryReport(_)
+            | CoreResourceMsg::RevokeTokenForFile(..)
+            | CoreResourceMsg::RefreshTokenForFile(..) => {},
         }
         true
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct AuthCacheEntry {
-    pub user_name: String,
-    pub password: String,
-}
-
-impl Default for AuthCache {
-    fn default() -> Self {
-        Self {
-            version: 1,
-            entries: HashMap::new(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct AuthCache {
-    pub version: u32,
-    pub entries: HashMap<String, AuthCacheEntry>,
-}
+pub use crate::http_state::{AuthCache, AuthCacheEntry};
 
 pub struct CoreResourceManager {
     devtools_sender: Option<Sender<DevtoolsControlMsg>>,
@@ -760,8 +709,7 @@ impl CoreResourceManager {
         http_state: &Arc<HttpState>,
     ) {
         if let Some(cookie) = ServoCookie::new_wrapped(cookie, request, source) {
-            let mut cookie_jar = http_state.cookie_jar.write();
-            cookie_jar.push(cookie, request, source)
+            http_state.cookie_jar.push(cookie, request, source)
         }
     }
 

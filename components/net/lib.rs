@@ -16,6 +16,7 @@ mod hosts;
 pub mod hsts;
 pub mod http_cache;
 pub mod http_loader;
+pub mod http_state;
 pub mod image_cache;
 pub mod local_directory_listing;
 pub mod protocols;

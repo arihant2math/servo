@@ -96,9 +96,10 @@ pub fn create_handshake_request(
         headers.insert("Sec-WebSocket-Protocol", HeaderValue::from_str(&protocols)?);
     }
 
-    let mut cookie_jar = http_state.cookie_jar.write();
-    cookie_jar.remove_expired_cookies_for_url(&request.url);
-    if let Some(cookie_list) = cookie_jar.cookies_for_url(&request.url, CookieSource::HTTP) {
+    if let Some(cookie_list) = http_state
+        .cookie_jar
+        .cookies_for_url(&request.url, CookieSource::HTTP)
+    {
         headers.insert("Cookie", HeaderValue::from_str(&cookie_list)?);
     }
 
@@ -138,25 +139,22 @@ fn process_ws_response(
         protocol_in_use = Some(protocol_name.to_string());
     }
 
-    let mut jar = http_state.cookie_jar.write();
     // TODO(eijebong): Replace thise once typed headers settled on a cookie impl
     for cookie in response.headers().get_all(header::SET_COOKIE) {
         let cookie_bytes = cookie.as_bytes();
         if !ServoCookie::is_valid_name_or_value(cookie_bytes) {
             continue;
         }
-        if let Ok(s) = std::str::from_utf8(cookie_bytes) &&
-            let Some(cookie) =
-                ServoCookie::from_cookie_string(s, resource_url, CookieSource::HTTP)
-        {
-            jar.push(cookie, resource_url, CookieSource::HTTP);
+        if let Ok(s) = std::str::from_utf8(cookie_bytes) {
+            http_state
+                .cookie_jar
+                .set_cookie_for_url(resource_url, s, CookieSource::HTTP);
         }
     }
 
     http_state
         .hsts_list
-        .write()
-        .update_hsts_list_from_response(resource_url, response.headers());
+        .update_from_response(resource_url, response.headers());
 
     Ok(protocol_in_use)
 }

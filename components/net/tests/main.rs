@@ -109,10 +109,11 @@ fn create_http_state(fc: Option<GenericEmbedderProxy<NetToEmbedderMsg>>) -> Http
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let override_manager = net::connector::CertificateErrorOverrideManager::new();
+    let stores = net::http_state::create_http_state_stores(None);
     HttpState {
-        hsts_list: RwLock::new(net::hsts::HstsList::default()),
-        cookie_jar: RwLock::new(net::cookie_storage::CookieStorage::new(150)),
-        auth_cache: RwLock::new(net::resource_thread::AuthCache::default()),
+        hsts_list: stores.hsts_list,
+        cookie_jar: stores.cookie_jar,
+        auth_cache: stores.auth_cache,
         history_states: RwLock::new(FxHashMap::default()),
         http_cache: net::http_cache::HttpCache::default(),
         client: create_http_client(create_tls_config(

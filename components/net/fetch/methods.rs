@@ -161,11 +161,11 @@ pub(crate) fn transfers_request_body_stream_to_later_manual_redirect(
     request: &Request,
     response: &Response,
 ) -> bool {
-    request.mode == RequestMode::Navigate &&
-        request.redirect_mode == RedirectMode::Manual &&
-        request.body.is_some() &&
-        !response.is_network_error() &&
-        response
+    request.mode == RequestMode::Navigate
+        && request.redirect_mode == RedirectMode::Manual
+        && request.body.is_some()
+        && !response.is_network_error()
+        && response
             .actual_response()
             .status
             .try_code()
@@ -419,8 +419,8 @@ pub async fn main_fetch(
 
     // Step 3: If request’s local-URLs-only flag is set and request’s
     // current URL is not local, then set response to a network error.
-    if request.local_urls_only &&
-        !matches!(
+    if request.local_urls_only
+        && !matches!(
             request.current_url().scheme(),
             "about" | "blob" | "data" | "filesystem"
         )
@@ -447,8 +447,8 @@ pub async fn main_fetch(
 
     // Step 5. Upgrade request to a potentially trustworthy URL, if appropriate.
     // Step 6. Upgrade a mixed content request to a potentially trustworthy URL, if appropriate.
-    if should_upgrade_request_to_potentially_trustworthy(request, context) ||
-        should_upgrade_mixed_content_request(request, &context.protocols)
+    if should_upgrade_request_to_potentially_trustworthy(request, context)
+        || should_upgrade_mixed_content_request(request, &context.protocols)
     {
         trace!(
             "upgrading {} targeting {:?}",
@@ -522,7 +522,6 @@ pub async fn main_fetch(
     context
         .state
         .hsts_list
-        .read()
         .apply_hsts_rules(request.current_url_mut());
 
     // Step 11. If recursive is false, then run the remaining steps in parallel.
@@ -596,10 +595,10 @@ pub async fn main_fetch(
                 }
             } else if !matches!(current_scheme, "http" | "https") {
                 Response::network_error(NetworkError::UnsupportedScheme)
-            } else if request.use_cors_preflight ||
-                (request.unsafe_request &&
-                    (!is_cors_safelisted_method(&request.method) ||
-                        request.headers.iter().any(|(name, value)| {
+            } else if request.use_cors_preflight
+                || (request.unsafe_request
+                    && (!is_cors_safelisted_method(&request.method)
+                        || request.headers.iter().any(|(name, value)| {
                             !is_cors_safelisted_request_header(&name, &value)
                         })))
             {
@@ -668,8 +667,8 @@ pub async fn main_fetch(
                 // Step 14.1.2. If request’s credentials mode is not "include" and headerNames
                 // contains `*`, then set response’s CORS-exposed header-name list to all unique
                 // header names in response’s header list.
-                if request.credentials_mode != CredentialsMode::Include &&
-                    list.iter().any(|header| header == "*")
+                if request.credentials_mode != CredentialsMode::Include
+                    && list.iter().any(|header| header == "*")
                 {
                     response.cors_exposed_header_name_list = response
                         .headers
@@ -698,12 +697,12 @@ pub async fn main_fetch(
     let internal_error = {
         // Tests for steps 17 and 18, before step 15 for borrowing concerns.
         let response_is_network_error = response.is_network_error();
-        let should_replace_with_nosniff_error = !response_is_network_error &&
-            should_be_blocked_due_to_nosniff(request.destination, &response.headers);
-        let should_replace_with_mime_type_error = !response_is_network_error &&
-            should_be_blocked_due_to_mime_type(request.destination, &response.headers);
-        let should_replace_with_mixed_content = !response_is_network_error &&
-            should_response_be_blocked_as_mixed_content(request, &response, &context.protocols);
+        let should_replace_with_nosniff_error = !response_is_network_error
+            && should_be_blocked_due_to_nosniff(request.destination, &response.headers);
+        let should_replace_with_mime_type_error = !response_is_network_error
+            && should_be_blocked_due_to_mime_type(request.destination, &response.headers);
+        let should_replace_with_mixed_content = !response_is_network_error
+            && should_response_be_blocked_as_mixed_content(request, &response, &context.protocols);
         let should_replace_with_csp_error = csp_request.is_some_and(|csp_request| {
             let (check_result, violations) =
                 should_response_be_blocked_by_csp(&csp_request, &response, &policy_container);
@@ -777,11 +776,11 @@ pub async fn main_fetch(
         // contain `Range`, then set response and internalResponse to a network error.
         // Also checking if internal response is a network error to prevent crash from attemtping to
         // read status of a network error if we blocked the request above.
-        let internal_response = if !internal_response.is_network_error() &&
-            response_type == ResponseType::Opaque &&
-            internal_response.status.is_a_range_status() &&
-            internal_response.range_requested &&
-            !request.headers.contains_key(RANGE)
+        let internal_response = if !internal_response.is_network_error()
+            && response_type == ResponseType::Opaque
+            && internal_response.status.is_a_range_status()
+            && internal_response.range_requested
+            && !request.headers.contains_key(RANGE)
         {
             // Defer rebinding result
             blocked_error_response =
@@ -796,9 +795,9 @@ pub async fn main_fetch(
         // disregard any enqueuing toward it (if any).
         // NOTE: We check `internal_response` since we did not mutate `response` in the previous steps.
         let not_network_error = !response_is_network_error && !internal_response.is_network_error();
-        if not_network_error &&
-            (is_null_body_status(&internal_response.status) ||
-                matches!(request.method, Method::HEAD | Method::CONNECT))
+        if not_network_error
+            && (is_null_body_status(&internal_response.status)
+                || matches!(request.method, Method::HEAD | Method::CONNECT))
         {
             // when Fetch is used only asynchronously, we will need to make sure
             // that nothing tries to write to the body at this point
@@ -823,8 +822,8 @@ pub async fn main_fetch(
 
         // Step 19.2.
         let integrity_metadata = &request.integrity_metadata;
-        if response.termination_reason.is_none() &&
-            !is_response_integrity_valid(integrity_metadata, &response)
+        if response.termination_reason.is_none()
+            && !is_response_integrity_valid(integrity_metadata, &response)
         {
             Response::network_error(NetworkError::SubresourceIntegrity)
         } else {
@@ -955,8 +954,8 @@ impl RangeRequestBounds {
     pub fn get_final(&self, len: Option<u64>) -> Result<RelativePos, &'static str> {
         match self {
             RangeRequestBounds::Final(pos) => {
-                if let Some(len) = len &&
-                    pos.start <= len as i64
+                if let Some(len) = len
+                    && pos.start <= len as i64
                 {
                     return Ok(*pos);
                 }
@@ -1110,10 +1109,10 @@ async fn scheme_fetch(
 fn is_null_body_status(status: &HttpStatus) -> bool {
     matches!(
         status.try_code(),
-        Some(StatusCode::SWITCHING_PROTOCOLS) |
-            Some(StatusCode::NO_CONTENT) |
-            Some(StatusCode::RESET_CONTENT) |
-            Some(StatusCode::NOT_MODIFIED)
+        Some(StatusCode::SWITCHING_PROTOCOLS)
+            | Some(StatusCode::NO_CONTENT)
+            | Some(StatusCode::RESET_CONTENT)
+            | Some(StatusCode::NOT_MODIFIED)
     )
 }
 
@@ -1189,8 +1188,8 @@ fn should_be_blocked_due_to_mime_type(
     //    - mimeType’s essence starts with "audio/", "image/", or "video/".
     //    - mimeType’s essence is "text/csv".
     // Step 5: Return allowed.
-    destination.is_script_like() &&
-        match mime_type.type_() {
+    destination.is_script_like()
+        && match mime_type.type_() {
             mime::AUDIO | mime::VIDEO | mime::IMAGE => true,
             mime::TEXT if mime_type.subtype() == mime::CSV => true,
             _ => false,
@@ -1221,8 +1220,8 @@ pub fn should_request_be_blocked_as_mixed_content(
     // Step 1. Return allowed if one or more of the following conditions are met:
     // 1.1. Does settings prohibit mixed security contexts?
     // returns "Does Not Restrict Mixed Security Contexts" when applied to request’s client.
-    if do_settings_prohibit_mixed_security_contexts(request) ==
-        MixedSecurityProhibited::NotProhibited
+    if do_settings_prohibit_mixed_security_contexts(request)
+        == MixedSecurityProhibited::NotProhibited
     {
         return false;
     }
@@ -1253,8 +1252,8 @@ pub fn should_response_be_blocked_as_mixed_content(
     // Step 1. Return allowed if one or more of the following conditions are met:
     // 1.1. Does settings prohibit mixed security contexts? returns Does Not Restrict Mixed Content
     // when applied to request’s client.
-    if do_settings_prohibit_mixed_security_contexts(request) ==
-        MixedSecurityProhibited::NotProhibited
+    if do_settings_prohibit_mixed_security_contexts(request)
+        == MixedSecurityProhibited::NotProhibited
     {
         return false;
     }
@@ -1336,11 +1335,11 @@ fn should_upgrade_request_to_potentially_trustworthy(
         // request’s header list if any of the following criteria are met:
         // * request’s URL is not a potentially trustworthy URL
         // * request’s URL's host is not a preloadable HSTS host
-        if !is_url_potentially_trustworthy(&context.protocols, &request.current_url()) ||
-            request
+        if !is_url_potentially_trustworthy(&context.protocols, &request.current_url())
+            || request
                 .current_url()
                 .host_str()
-                .is_none_or(|host| context.state.hsts_list.read().is_host_secure(host))
+                .is_none_or(|host| context.state.hsts_list.is_host_secure(host))
         {
             debug!("Appending the Upgrade-Insecure-Requests header to request’s header list");
             request
@@ -1407,8 +1406,8 @@ fn should_upgrade_mixed_content_request(
     }
 
     // Step 1.3
-    if do_settings_prohibit_mixed_security_contexts(request) ==
-        MixedSecurityProhibited::NotProhibited
+    if do_settings_prohibit_mixed_security_contexts(request)
+        == MixedSecurityProhibited::NotProhibited
     {
         return false;
     }

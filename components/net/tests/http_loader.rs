@@ -29,9 +29,9 @@ use http_body_util::combinators::BoxBody;
 use hyper::body::{Body, Bytes, Incoming};
 use hyper::{Request as HyperRequest, Response as HyperResponse};
 use net::cookie::ServoCookie;
-use net::cookie_storage::CookieStorage;
 use net::fetch::methods::{self};
 use net::http_loader::{determine_requests_referrer, serialize_origin};
+use net::http_state::SqliteCookieJarStore;
 use net::resource_thread::AuthCacheEntry;
 use net::test::DECODER_BUFFER_SIZE;
 use net_traits::blob_url_store::UrlWithBlobClaim;
@@ -42,7 +42,7 @@ use net_traits::request::{
 };
 use net_traits::response::{Response, ResponseBody};
 use net_traits::{CookieSource, FetchTaskTarget, NetworkError, ReferrerPolicy, get_current_locale};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use servo_base::id::{TEST_PIPELINE_ID, TEST_WEBVIEW_ID};
 use servo_url::{ImmutableOrigin, ServoUrl};
 use url::Url;
@@ -53,15 +53,10 @@ use crate::{
     replace_host_table, spawn_blocking_task,
 };
 
-fn assert_cookie_for_domain(
-    cookie_jar: &RwLock<CookieStorage>,
-    domain: &str,
-    cookie: Option<&str>,
-) {
-    let mut cookie_jar = cookie_jar.write();
-    let url = ServoUrl::parse(&*domain).unwrap();
+fn assert_cookie_for_domain(cookie_jar: &SqliteCookieJarStore, domain: &str, cookie: Option<&str>) {
+    let url = ServoUrl::parse(domain).unwrap();
     let cookies = cookie_jar.cookies_for_url(&url, CookieSource::HTTP);
-    assert_eq!(cookies.as_ref().map(|c| &**c), cookie);
+    assert_eq!(cookies.as_deref(), cookie);
 }
 
 fn recv_http_request(devtools_port: &Receiver<DevtoolsControlMsg>) -> DevtoolsHttpRequest {
@@ -718,7 +713,6 @@ fn test_load_doesnt_add_host_to_hsts_list_when_url_is_http_even_if_hsts_headers_
         context
             .state
             .hsts_list
-            .read()
             .is_host_secure(url.host_str().unwrap()),
         false
     );
@@ -787,14 +781,16 @@ fn test_load_sets_requests_cookies_header_for_url_by_getting_cookies_from_the_re
     let mut context = new_fetch_context(None, None);
 
     {
-        let mut cookie_jar = context.state.cookie_jar.write();
         let cookie = ServoCookie::new_wrapped(
             CookiePair::new("mozillaIs".to_owned(), "theBest".to_owned()),
             &url,
             CookieSource::HTTP,
         )
         .unwrap();
-        cookie_jar.push(cookie, &url, CookieSource::HTTP);
+        context
+            .state
+            .cookie_jar
+            .push(cookie, &url, CookieSource::HTTP);
     }
 
     let request = RequestBuilder::new(None, url.clone(), Referrer::NoReferrer)
@@ -837,14 +833,16 @@ fn test_load_sends_cookie_if_nonhttp() {
     let mut context = new_fetch_context(None, None);
 
     {
-        let mut cookie_jar = context.state.cookie_jar.write();
         let cookie = ServoCookie::new_wrapped(
             CookiePair::new("mozillaIs".to_owned(), "theBest".to_owned()),
             &url,
             CookieSource::NonHTTP,
         )
         .unwrap();
-        cookie_jar.push(cookie, &url, CookieSource::HTTP);
+        context
+            .state
+            .cookie_jar
+            .push(cookie, &url, CookieSource::HTTP);
     }
 
     let request = RequestBuilder::new(None, url.clone(), Referrer::NoReferrer)
@@ -916,9 +914,10 @@ fn test_cookie_set_with_httponly_should_not_be_available_using_getcookiesforurl(
         url.as_str(),
         Some("mozillaIs=theBest"),
     );
-    let mut cookie_jar = context.state.cookie_jar.write();
     assert!(
-        cookie_jar
+        context
+            .state
+            .cookie_jar
             .cookies_for_url(&url, CookieSource::NonHTTP)
             .is_none()
     );
@@ -1362,7 +1361,6 @@ fn test_redirect_from_x_to_y_provides_y_cookies_from_y() {
 
     let mut context = new_fetch_context(None, None);
     {
-        let mut cookie_jar = context.state.cookie_jar.write();
         let cookie_x = ServoCookie::new_wrapped(
             CookiePair::new("mozillaIsNot".to_owned(), "dotOrg".to_owned()),
             &url_x,
@@ -1370,7 +1368,10 @@ fn test_redirect_from_x_to_y_provides_y_cookies_from_y() {
         )
         .unwrap();
 
-        cookie_jar.push(cookie_x, &url_x, CookieSource::HTTP);
+        context
+            .state
+            .cookie_jar
+            .push(cookie_x, &url_x, CookieSource::HTTP);
 
         let cookie_y = ServoCookie::new_wrapped(
             CookiePair::new("mozillaIs".to_owned(), "theBest".to_owned()),
@@ -1378,7 +1379,10 @@ fn test_redirect_from_x_to_y_provides_y_cookies_from_y() {
             CookieSource::HTTP,
         )
         .unwrap();
-        cookie_jar.push(cookie_y, &url_y, CookieSource::HTTP);
+        context
+            .state
+            .cookie_jar
+            .push(cookie_y, &url_y, CookieSource::HTTP);
     }
 
     let request = RequestBuilder::new(
@@ -1496,9 +1500,7 @@ fn test_if_auth_creds_not_in_url_but_in_cache_it_sets_it() {
     context
         .state
         .auth_cache
-        .write()
-        .entries
-        .insert(url.origin().clone().ascii_serialization(), auth_entry);
+        .set(url.origin().ascii_serialization(), auth_entry);
 
     let response = fetch_with_context(request, &mut context);
 

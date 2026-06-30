@@ -326,8 +326,8 @@ fn test_cors_preflight_fetch() {
     let handler =
         move |request: HyperRequest<Incoming>,
               response: &mut HyperResponse<BoxBody<Bytes, hyper::Error>>| {
-            if request.method() == Method::OPTIONS &&
-                state.clone().fetch_add(1, Ordering::SeqCst) == 0
+            if request.method() == Method::OPTIONS
+                && state.clone().fetch_add(1, Ordering::SeqCst) == 0
             {
                 assert!(
                     request
@@ -398,8 +398,8 @@ fn test_cors_preflight_cache_fetch() {
     let handler =
         move |request: HyperRequest<Incoming>,
               response: &mut HyperResponse<BoxBody<Bytes, hyper::Error>>| {
-            if request.method() == Method::OPTIONS &&
-                state.clone().fetch_add(1, Ordering::SeqCst) == 0
+            if request.method() == Method::OPTIONS
+                && state.clone().fetch_add(1, Ordering::SeqCst) == 0
             {
                 assert!(
                     request
@@ -473,8 +473,8 @@ fn test_cors_preflight_fetch_network_error() {
     let handler =
         move |request: HyperRequest<Incoming>,
               response: &mut HyperResponse<BoxBody<Bytes, hyper::Error>>| {
-            if request.method() == Method::OPTIONS &&
-                state.clone().fetch_add(1, Ordering::SeqCst) == 0
+            if request.method() == Method::OPTIONS
+                && state.clone().fetch_add(1, Ordering::SeqCst) == 0
             {
                 assert!(
                     request
@@ -799,8 +799,7 @@ fn test_fetch_with_hsts() {
     }
 
     {
-        let mut list = context.state.hsts_list.write();
-        list.push(
+        context.state.hsts_list.push(
             HstsEntry::new("localhost".to_owned(), IncludeSubdomains::NotIncluded, None).unwrap(),
         );
     }
@@ -887,7 +886,6 @@ fn test_load_adds_host_to_hsts_list_when_url_is_https() {
         context
             .state
             .hsts_list
-            .read()
             .is_host_secure(url.host_str().unwrap())
     );
 }

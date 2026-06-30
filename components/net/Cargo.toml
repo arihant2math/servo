@@ -61,11 +61,13 @@ profile_traits = { workspace = true }
 quick_cache = { workspace = true, features = ["ahash"] }
 regex = { workspace = true }
 resvg = { workspace = true }
+rusqlite = { workspace = true, features = ["bundled"] }
 rustc-hash = { workspace = true }
 rustls = { workspace = true, features = ["aws-lc-rs"] }
 rustls-pki-types = { workspace = true }
 rustls-platform-verifier = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 servo-base = { workspace = true }
 servo-config = { workspace = true }
 servo-default-resources = { workspace = true, optional = true }
@@ -97,6 +99,7 @@ hyper-util = { workspace = true, features = ["server-graceful"] }
 net = { package = "servo-net", path = ".", features = ["test-util"] }
 rustls = { workspace = true, features = ["aws-lc-rs"] }
 servo-default-resources = { workspace = true }
+tempfile = { workspace = true }
 
 [[test]]
 name = "main"
