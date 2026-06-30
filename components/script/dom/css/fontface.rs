@@ -5,7 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use cssparser::{Parser, ParserInput};
+use cssparser::{Parser, ParserInput, serialize_string};
 use dom_struct::dom_struct;
 use fonts::{FontContext, FontContextWebFontMethods, FontTemplate, LowercaseFontFamilyName};
 use js::context::JSContext;
@@ -14,11 +14,13 @@ use script_bindings::cell::DomRefCell;
 use script_bindings::reflector::{Reflector, reflect_dom_object_with_proto};
 use style::error_reporting::ParseErrorReporter;
 use style::font_face::SourceList;
+use style::parser::Parse;
 use style::properties::font_face::Descriptors;
 use style::stylesheets::{CssRuleType, FontFaceRule, UrlExtraData};
+use style::values::computed::font::FamilyName;
 use style_traits::{ParsingMode, ToCss};
 
-use crate::css::parser_context_for_document_with_reporter;
+use crate::css::{parser_context_for_document, parser_context_for_document_with_reporter};
 use crate::dom::bindings::codegen::Bindings::FontFaceBinding::{
     FontFaceDescriptors, FontFaceLoadStatus, FontFaceMethods,
 };
@@ -153,6 +155,46 @@ fn parse_font_face_descriptors(
     }
 }
 
+/// <https://drafts.csswg.org/css-font-loading/#font-face-constructor>
+fn parse_font_face_descriptors_with_quoted_family_fallback(
+    global: &GlobalScope,
+    family_name: &DOMString,
+    sources: Option<&DOMString>,
+    input_descriptors: &FontFaceDescriptors,
+) -> Fallible<(DOMString, FontFaceRule)> {
+    let document = global.as_window().Document();
+    let url_data = UrlExtraData(document.owner_global().api_base_url().get_arc());
+    let context = parser_context_for_document(
+        &document,
+        CssRuleType::FontFace,
+        ParsingMode::DEFAULT,
+        &url_data,
+    );
+
+    let family_name = family_name.str();
+    let normalized_family_name = {
+        let mut input = ParserInput::new(family_name.as_ref());
+        let mut parser = Parser::new(&mut input);
+        match parser.parse_entirely(|input| FamilyName::parse(&context, input)) {
+            Ok(parsed_family_name)
+                if parsed_family_name.to_css_string() == family_name.as_ref() =>
+            {
+                DOMString::from(family_name.as_ref())
+            },
+            _ => {
+                let mut quoted_family_name = String::new();
+                serialize_string(family_name.as_ref(), &mut quoted_family_name)
+                    .expect("serializing a font family name should not fail");
+                DOMString::from(quoted_family_name)
+            },
+        }
+    };
+
+    let rule =
+        parse_font_face_descriptors(global, &normalized_family_name, sources, input_descriptors)?;
+    Ok((normalized_family_name, rule))
+}
+
 fn serialize_parsed_descriptors(descriptors: &Descriptors) -> FontFaceDescriptors {
     FontFaceDescriptors {
         ascentOverride: descriptors.ascent_override.to_css_string().into(),
@@ -232,9 +274,14 @@ impl FontFace {
         // according to the grammars of the corresponding descriptors of the CSS @font-face rule If
         // the source argument is a CSSOMString, parse it according to the grammar of the CSS src
         // descriptor of the @font-face rule.
-        let parse_result = parse_font_face_descriptors(global, &family_name, source, descriptors);
+        let parse_result = parse_font_face_descriptors_with_quoted_family_fallback(
+            global,
+            &family_name,
+            source,
+            descriptors,
+        );
 
-        let Ok(ref parsed_font_face_rule) = parse_result else {
+        let Ok((family_name, parsed_font_face_rule)) = parse_result else {
             // If any of them fail to parse correctly, reject font face’s
             // [[FontStatusPromise]] with a DOMException named "SyntaxError", set font face’s
             // corresponding attributes to the empty string, and set font face’s status attribute
@@ -451,7 +498,12 @@ impl FontFaceMethods<crate::DomTypeHolder> for FontFace {
     fn SetFamily(&self, family_name: DOMString) -> ErrorResult {
         let descriptors = self.descriptors.borrow();
         let global = self.global();
-        let _ = parse_font_face_descriptors(&global, &family_name, None, &descriptors)?;
+        let (family_name, _) = parse_font_face_descriptors_with_quoted_family_fallback(
+            &global,
+            &family_name,
+            None,
+            &descriptors,
+        )?;
         *self.family_name.borrow_mut() = family_name;
         Ok(())
     }

@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use cssparser::{Parser, ParserInput};
 use dom_struct::dom_struct;
 use js::context::JSContext;
 use js::gc::Handle;
@@ -17,9 +18,15 @@ use script_bindings::codegen::GenericBindings::FontFaceBinding::{
 };
 use script_bindings::like::Setlike;
 use script_bindings::reflector::reflect_dom_object_with_proto_and_cx;
+use style::properties::shorthands::font;
+use style::stylesheets::{CssRuleType, UrlExtraData};
+use style_traits::ParsingMode;
 
+use crate::css::{parser_context_for_anonymous_content, parser_context_for_document};
 use crate::dom::bindings::codegen::Bindings::FontFaceSetBinding::FontFaceSetMethods;
 use crate::dom::bindings::codegen::Bindings::WindowBinding::WindowMethods;
+use crate::dom::bindings::error::{Error, Fallible};
+use crate::dom::bindings::inheritance::Castable;
 use crate::dom::bindings::refcounted::TrustedPromise;
 use crate::dom::bindings::reflector::DomGlobal;
 use crate::dom::bindings::root::{Dom, DomRoot};
@@ -137,6 +144,37 @@ impl FontFaceSet {
         // Step 4. Queue a task to fire a font load event named loading at font face set.
         // TODO: Implement support for font loading events.
     }
+
+    /// <https://drafts.csswg.org/css-font-loading/#find-the-matching-font-faces>
+    fn parse_font_shorthand(global: &GlobalScope, font_shorthand: &str) -> Fallible<()> {
+        let url_data = UrlExtraData(global.api_base_url().get_arc());
+        let mut input = ParserInput::new(font_shorthand);
+        let mut parser = Parser::new(&mut input);
+
+        if let Some(window) = global.downcast::<Window>() {
+            let document = window.Document();
+            let context = parser_context_for_document(
+                &document,
+                CssRuleType::Style,
+                ParsingMode::DEFAULT,
+                &url_data,
+            );
+            parser
+                .parse_entirely(|input| font::parse_value(&context, input))
+                .map(|_| ())
+                .map_err(|_| Error::Syntax(None))
+        } else {
+            let context = parser_context_for_anonymous_content(
+                CssRuleType::Style,
+                ParsingMode::DEFAULT,
+                &url_data,
+            );
+            parser
+                .parse_entirely(|input| font::parse_value(&context, input))
+                .map(|_| ())
+                .map_err(|_| Error::Syntax(None))
+        }
+    }
 }
 
 impl FontFaceSetMethods<crate::DomTypeHolder> for FontFaceSet {
@@ -192,17 +230,21 @@ impl FontFaceSetMethods<crate::DomTypeHolder> for FontFaceSet {
     }
 
     /// <https://drafts.csswg.org/css-font-loading/#dom-fontfaceset-load>
-    fn Load(&self, cx: &mut JSContext, _font: DOMString, _text: DOMString) -> Rc<Promise> {
+    fn Load(&self, cx: &mut JSContext, font: DOMString, _text: DOMString) -> Rc<Promise> {
         // Step 1. Let font face set be the FontFaceSet object this method was called on. Let
         // promise be a newly-created promise object.
-        let load_promise = Promise::new(cx, &self.global());
+        let global = self.global();
+        let load_promise = Promise::new(cx, &global);
 
         // Step 3. Find the matching font faces from font face set using the font and text
         // arguments passed to the function, and let font face list be the return value (ignoring
         // the found faces flag). If a syntax error was returned, reject promise with a SyntaxError
         // exception and terminate these steps.
-        //
-        // TODO: Implement this.
+        let font = font.str();
+        if let Err(error) = Self::parse_font_shorthand(&global, font.as_ref()) {
+            load_promise.reject_error(cx, error);
+            return load_promise;
+        }
 
         #[derive(MallocSizeOf, JSTraceable)]
         struct LoadPromiseFulfillmentHandler {
